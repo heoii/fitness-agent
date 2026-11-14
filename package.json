@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
+    "profile": "tsx scripts/profile_inputs.ts",
     "test:5": "tsx scripts/compliance.ts --n 5",
     "test:20": "tsx scripts/compliance.ts --n 20"
   },

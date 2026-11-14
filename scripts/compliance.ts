@@ -2,8 +2,11 @@
  * W2 判据：跑 20 次真模型调用，统计结构化输出合规次数（≥18 算过）
  *
  * 用法:
- *   npx tsx scripts/compliance.ts                 # 默认 20 篇、按日期降序
+ *   npx tsx scripts/compliance.ts                 # 默认 20 篇力量记录、按日期降序
  *   npx tsx scripts/compliance.ts --n 5           # 冒烟用
+ *
+ * 样本只有力量训练（口径见 scripts/samples.ts）。cardio 记录（游泳/步行）结构极简、
+ * 天然合规，放在分母里只是送分，2026-11-15 起不再计入。
  *
  * 为什么直接打 Ollama 而不是打 /api/extract：
  *   本机沙箱不允许 next dev 写 ~/Library/Preferences，HTTP 层跑不起来。
@@ -16,10 +19,11 @@
  *   B. 字段层：返回的 date / session / 动作数 与文件 frontmatter+正文正则解析一致
  *      —— 只过 A 不过 B 说明「JSON 合法但内容错」，这比语法错更危险
  */
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { OLLAMA_MODEL, OLLAMA_URL, TIMEOUT_MS, NUM_PREDICT, buildPrompt, validateRaw } from "../src/lib/extract";
 import { kbDir } from "./kb-dir";
+import { pickSamples } from "./samples";
 
 const args = process.argv.slice(2);
 const N = Number(args[args.indexOf("--n") + 1] || 20) || 20;
@@ -120,18 +124,15 @@ async function runOne(idx: number, file: string): Promise<Row> {
 }
 
 async function main() {
-  const files = readdirSync(DIR)
-    .filter((f) => f.includes("-训练-") && f.endsWith(".md"))
-    .sort()
-    .reverse()
-    .slice(0, N);
+  // 样本口径与 profile_inputs.ts 共用一处（scripts/samples.ts），否则两边说的「20 篇」不是同一批
+  const files = pickSamples(DIR, N);
 
   if (files.length === 0) {
     console.error(`没有找到训练记录：${DIR}`);
     process.exit(1);
   }
 
-  console.log(`样本 ${files.length} 篇 · 模型 ${OLLAMA_MODEL} · ${OLLAMA_URL}\n`);
+  console.log(`样本 ${files.length} 篇（仅力量） · 模型 ${OLLAMA_MODEL} · ${OLLAMA_URL}\n`);
   const rows: Row[] = [];
   for (let i = 0; i < files.length; i++) {
     const row = await runOne(i + 1, join(DIR, files[i]));

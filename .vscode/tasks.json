@@ -17,7 +17,7 @@
     },
     {
       "label": "② 完整测试 · 20 篇（约 12 分钟）",
-      "detail": "验收用。跑完要看到「19/20 PASS」才算这周过关。",
+      "detail": "验收用。20 篇力量记录，跑完要看到「20/20 PASS」。",
       "type": "shell",
       "command": "npx tsx scripts/compliance.ts --n 20",
       "problemMatcher": [],
