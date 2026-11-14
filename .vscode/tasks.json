@@ -1,0 +1,78 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "① 冒烟测试 · 5 篇（约 2 分钟）",
+      "detail": "改完任何东西先跑这个。只看通过/失败，不看细节。",
+      "type": "shell",
+      "command": "npx tsx scripts/compliance.ts --n 5",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true,
+        "focus": true
+      },
+      "group": { "kind": "test", "isDefault": true }
+    },
+    {
+      "label": "② 完整测试 · 20 篇（约 12 分钟）",
+      "detail": "验收用。跑完要看到「19/20 PASS」才算这周过关。",
+      "type": "shell",
+      "command": "npx tsx scripts/compliance.ts --n 20",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true,
+        "focus": true
+      },
+      "group": "test"
+    },
+    {
+      "label": "③ 类型检查",
+      "detail": "不跑模型，只查 TS 类型。3 秒出结果。",
+      "type": "shell",
+      "command": "npx tsc --noEmit",
+      "problemMatcher": ["$tsc"],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
+    },
+    {
+      "label": "④ 在浏览器打开报告页",
+      "detail": "改完 docs/w2-structured-output.html 后跑这个刷新看效果。",
+      "type": "shell",
+      "command": "open docs/w2-structured-output.html",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "never"
+      }
+    },
+    {
+      "label": "⑤ 启动开发服务器",
+      "detail": "在 VS Code 自带的终端里应该能起来（我这里受沙箱限制起不来）。起来后访问 localhost:3000。",
+      "type": "shell",
+      "command": "npm run dev",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "⑥ 用 curl 打一次接口",
+      "detail": "开发服务器起着的时候跑这个，验证 HTTP 那层。",
+      "type": "shell",
+      "command": "curl -s -X POST http://localhost:3000/api/extract -H 'Content-Type: application/json' -d '{\"text\":\"# 2026-11-14 训练 · 腿A\\n\\n## 动作明细\\n\\n### 深蹲\\n组1：60kg × 8，休息 120s\\n组2：60kg × 8\"}' | python3 -m json.tool",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
+    }
+  ]
+}

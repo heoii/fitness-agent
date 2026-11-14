@@ -1,0 +1,18 @@
+{
+  "editor.tabSize": 2,
+  "editor.wordWrap": "on",
+  "editor.minimap.enabled": false,
+  "editor.renderWhitespace": "none",
+  "editor.bracketPairColorization.enabled": true,
+  "editor.guides.indentation": true,
+  "files.exclude": {
+    "**/node_modules": true,
+    "**/.next": true,
+    "**/tsconfig.tsbuildinfo": true,
+    "**/.git": true
+  },
+  "explorer.compactFolders": false,
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "workbench.startupEditor": "readme",
+  "terminal.integrated.defaultProfile.osx": "zsh"
+}

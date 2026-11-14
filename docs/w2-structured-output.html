@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>W2 验收 · 让模型稳定吐 JSON</title>
+<style>
+  :root{
+    --bg:#faf8f5;
+    --surface:#ffffff;
+    --ink:#181614;
+    --ink-2:#4d4842;
+    --ink-3:#8a8378;
+    --line:#e6e1d8;
+    --line-strong:#d5cec1;
+    --accent:#b45309;
+    --accent-soft:#fdf3e7;
+    --pass:#15803d;
+    --pass-soft:#eef7ef;
+    --fail:#b3261e;
+    --fail-soft:#fdeeec;
+    --warn:#a16207;
+    --warn-soft:#fdf6e3;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    background:var(--bg);color:var(--ink);font-family:var(--sans);
+    font-size:16px;line-height:1.75;-webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:880px;margin:0 auto;padding:0 32px}
+
+  /* ---------- hero ---------- */
+  .hero{padding:76px 0 44px;border-bottom:1px solid var(--line)}
+  .eyebrow{
+    font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--accent);margin-bottom:22px;display:flex;align-items:center;gap:10px;
+  }
+  .eyebrow::after{content:"";flex:1;height:1px;background:var(--line-strong)}
+  h1{font-size:40px;line-height:1.25;font-weight:650;letter-spacing:-.02em;margin-bottom:18px}
+  h1 em{font-style:normal;color:var(--accent)}
+  .lede{font-size:18px;color:var(--ink-2);max-width:640px}
+  .lede strong{color:var(--ink);font-weight:600}
+
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line);margin-top:38px;border-radius:10px;overflow:hidden}
+  .stat{background:var(--surface);padding:20px 18px}
+  .stat .k{font-family:var(--mono);font-size:11px;letter-spacing:.08em;color:var(--ink-3);text-transform:uppercase;margin-bottom:8px}
+  .stat .v{font-family:var(--mono);font-size:26px;font-weight:600;line-height:1.1;letter-spacing:-.02em}
+  .stat .v small{font-size:13px;color:var(--ink-3);font-weight:400;letter-spacing:0}
+  .stat .v.ok{color:var(--pass)}
+  .stat .v.warn{color:var(--warn)}
+
+  /* ---------- toc ---------- */
+  .toc{padding:28px 0;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:8px 22px}
+  .toc a{
+    font-size:13px;color:var(--ink-3);text-decoration:none;font-family:var(--mono);
+    border-bottom:1px solid transparent;transition:.15s;
+  }
+  .toc a:hover{color:var(--accent);border-bottom-color:var(--accent)}
+  .toc a b{color:var(--ink-2);font-weight:500;margin-right:6px}
+
+  /* ---------- sections ---------- */
+  section{padding:56px 0;border-bottom:1px solid var(--line)}
+  section:last-of-type{border-bottom:0}
+  .sec-head{display:flex;align-items:baseline;gap:14px;margin-bottom:10px}
+  .sec-num{font-family:var(--mono);font-size:12px;color:var(--accent);letter-spacing:.1em;padding-top:4px}
+  h2{font-size:26px;font-weight:620;letter-spacing:-.015em;line-height:1.35}
+  .sec-sub{color:var(--ink-3);font-size:14.5px;margin:-2px 0 30px 32px}
+  h3{font-size:17px;font-weight:620;margin:34px 0 10px;letter-spacing:-.005em}
+  h3:first-of-type{margin-top:0}
+  p{color:var(--ink-2);margin-bottom:14px}
+  p strong,li strong{color:var(--ink);font-weight:600}
+  ul,ol{margin:0 0 16px 20px;color:var(--ink-2)}
+  li{margin-bottom:8px}
+  code{font-family:var(--mono);font-size:.88em;background:#f1ede5;padding:2px 6px;border-radius:4px;color:#7c3a06}
+
+  /* ---------- quote / callout ---------- */
+  .quote{
+    border-left:3px solid var(--accent);background:var(--accent-soft);
+    padding:18px 22px;margin:22px 0;border-radius:0 8px 8px 0;
+  }
+  .quote p{margin:0;color:#6b3a04;font-size:15.5px}
+  .quote p strong{color:#4a2703}
+
+  /* ---------- table ---------- */
+  table{width:100%;border-collapse:collapse;margin:20px 0 8px;font-size:14.5px}
+  th{
+    text-align:left;font-family:var(--mono);font-size:11px;letter-spacing:.07em;text-transform:uppercase;
+    color:var(--ink-3);font-weight:500;padding:0 12px 9px;border-bottom:1.5px solid var(--line-strong);
+  }
+  td{padding:11px 12px;border-bottom:1px solid var(--line);color:var(--ink-2);vertical-align:top}
+  tbody tr:hover{background:#fdfbf8}
+  td.mono,th.mono{font-family:var(--mono);font-size:13px}
+  td.file{font-family:var(--mono);font-size:12.5px;color:var(--ink-2);line-height:1.5}
+  .tbl-note{font-size:13px;color:var(--ink-3);margin-top:10px}
+
+  /* chips */
+  .chip{
+    display:inline-block;font-family:var(--mono);font-size:11.5px;font-weight:600;
+    padding:2px 8px;border-radius:4px;letter-spacing:.02em;white-space:nowrap;
+  }
+  .chip.ok{background:var(--pass-soft);color:var(--pass)}
+  .chip.no{background:var(--fail-soft);color:var(--fail)}
+  .chip.mid{background:var(--warn-soft);color:var(--warn)}
+
+  /* ---------- flow diagram ---------- */
+  .flow{
+    background:var(--surface);border:1px solid var(--line);border-radius:12px;
+    padding:28px 24px;margin:26px 0;
+  }
+  .flow-row{display:flex;align-items:stretch;gap:0;flex-wrap:nowrap}
+  .node{
+    flex:1;background:#faf8f5;border:1px solid var(--line-strong);border-radius:8px;
+    padding:13px 10px;text-align:center;min-width:0;
+  }
+  .node .n-k{font-family:var(--mono);font-size:10px;letter-spacing:.08em;color:var(--ink-3);text-transform:uppercase;margin-bottom:5px}
+  .node .n-v{font-size:13.5px;font-weight:600;color:var(--ink);line-height:1.4;word-break:break-word}
+  .node .n-d{font-size:11.5px;color:var(--ink-3);margin-top:4px;line-height:1.4}
+  .node.gate{background:var(--accent-soft);border-color:#e8c89a}
+  .node.gate .n-v{color:#7c3a06}
+  .arrow{display:flex;align-items:center;padding:0 6px;color:var(--line-strong);font-size:15px;flex:0 0 auto}
+  .flow-foot{
+    margin-top:20px;padding-top:18px;border-top:1px dashed var(--line-strong);
+    display:grid;grid-template-columns:1fr 1fr;gap:20px;font-size:13px;color:var(--ink-2);
+  }
+  .flow-foot b{display:block;font-family:var(--mono);font-size:11px;letter-spacing:.06em;color:var(--ink-3);text-transform:uppercase;margin-bottom:4px}
+
+  /* ---------- failure cards ---------- */
+  .case{
+    background:var(--surface);border:1px solid var(--line);border-radius:10px;
+    padding:24px 26px;margin-bottom:16px;
+  }
+  .case-top{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+  .case-id{font-family:var(--mono);font-size:11px;color:#fff;background:var(--ink);padding:2px 7px;border-radius:4px;letter-spacing:.04em}
+  .case-name{font-family:var(--mono);font-size:13.5px;font-weight:600;color:var(--ink)}
+  .kv{display:grid;grid-template-columns:76px 1fr;gap:6px 14px;font-size:14.5px}
+  .kv dt{font-family:var(--mono);font-size:11.5px;color:var(--ink-3);letter-spacing:.05em;padding-top:3px}
+  .kv dd{color:var(--ink-2);margin:0}
+  .kv dd em{font-style:normal;background:#fdf3e7;color:#7c3a06;padding:1px 5px;border-radius:3px;font-family:var(--mono);font-size:12.5px}
+
+  /* ---------- code ---------- */
+  pre{
+    background:#26221d;color:#e8e2d8;border-radius:10px;padding:18px 20px;overflow-x:auto;
+    font-family:var(--mono);font-size:12.8px;line-height:1.7;margin:16px 0;
+  }
+  pre .c{color:#8a7f6d}
+  pre .del{color:#f3a49b}
+  pre .add{color:#9fd8a8}
+  pre .key{color:#f0c07a}
+  .code-label{
+    font-family:var(--mono);font-size:11px;letter-spacing:.07em;color:var(--ink-3);
+    text-transform:uppercase;margin-bottom:-8px;display:block;
+  }
+
+  /* ---------- invented schema ---------- */
+  .bad-keys{display:flex;flex-wrap:wrap;gap:7px;margin:16px 0 6px}
+  .bad-keys span{
+    font-family:var(--mono);font-size:12.5px;padding:5px 10px;border-radius:5px;
+    background:var(--fail-soft);color:var(--fail);border:1px solid #f2cfca;
+  }
+  .bad-keys span.was{background:#f1ede5;color:var(--ink-3);border-color:var(--line-strong);text-decoration:line-through}
+
+  /* ---------- qa ---------- */
+  details{
+    border:1px solid var(--line);border-radius:9px;background:var(--surface);
+    margin-bottom:10px;overflow:hidden;
+  }
+  details[open]{border-color:var(--line-strong)}
+  summary{
+    cursor:pointer;padding:15px 20px;font-weight:600;font-size:15px;color:var(--ink);
+    list-style:none;display:flex;gap:12px;align-items:flex-start;
+  }
+  summary::-webkit-details-marker{display:none}
+  summary::before{
+    content:"?";font-family:var(--mono);font-size:11px;font-weight:700;color:var(--accent);
+    background:var(--accent-soft);width:18px;height:18px;border-radius:4px;
+    display:flex;align-items:center;justify-content:center;flex:0 0 auto;margin-top:3px;
+  }
+  details[open] summary{border-bottom:1px solid var(--line);background:#fdfbf8}
+  .ans{padding:16px 20px 18px 50px;font-size:14.5px;color:var(--ink-2)}
+  .ans p:last-child{margin-bottom:0}
+  .ans .say{
+    display:block;background:#f7f4ee;border-left:2px solid var(--line-strong);
+    padding:10px 14px;border-radius:0 6px 6px 0;margin-top:10px;color:var(--ink);
+  }
+  .ans .say::before{
+    content:"这样答";display:block;font-family:var(--mono);font-size:10.5px;
+    letter-spacing:.08em;color:var(--ink-3);text-transform:uppercase;margin-bottom:5px;
+  }
+
+  /* ---------- knowledge points ---------- */
+  .kp{border-top:1px solid var(--line);padding:22px 0}
+  .kp:first-of-type{border-top:0;padding-top:0}
+  .kp-h{display:flex;align-items:baseline;gap:10px;margin-bottom:8px}
+  .kp-h .i{font-family:var(--mono);font-size:12px;color:var(--accent);font-weight:600}
+  .kp-h h4{font-size:16px;font-weight:620;color:var(--ink)}
+  .kp p{font-size:14.5px;margin-bottom:8px}
+  .selfcheck{
+    font-size:13.5px;color:#6b3a04;background:var(--accent-soft);
+    padding:9px 14px;border-radius:6px;margin-top:10px;
+  }
+  .selfcheck b{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#8a5a12}
+
+  /* ---------- checklist / next ---------- */
+  .next{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:26px 28px}
+  .next ol{margin-left:0;list-style:none;counter-reset:s}
+  .next li{counter-increment:s;position:relative;padding-left:34px;margin-bottom:14px;font-size:14.5px}
+  .next li::before{
+    content:counter(s);position:absolute;left:0;top:1px;width:22px;height:22px;border-radius:50%;
+    background:var(--ink);color:#fff;font-family:var(--mono);font-size:11.5px;font-weight:600;
+    display:flex;align-items:center;justify-content:center;
+  }
+
+  footer{padding:44px 0 64px;color:var(--ink-3);font-size:13px;font-family:var(--mono);line-height:2}
+  footer .rule{height:1px;background:var(--line);margin-bottom:24px}
+
+  @media (max-width:720px){
+    .wrap{padding:0 20px}
+    h1{font-size:30px}
+    .stats{grid-template-columns:repeat(2,1fr)}
+    .flow-row{flex-wrap:wrap}
+    .node{flex:1 1 40%}
+    .arrow{display:none}
+    .node{margin:4px}
+    .flow-foot{grid-template-columns:1fr}
+    .kv{grid-template-columns:1fr;gap:2px}
+    .kv dt{padding-top:8px}
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <!-- ══════════ HERO ══════════ -->
+  <header class="hero">
+    <div class="eyebrow">健身 Agent · W2 验收记录</div>
+    <h1>让模型<em>稳定</em>吐 JSON</h1>
+    <p class="lede">
+      用本地 7B 模型从 20 篇真实训练记录里抽结构化数据。第一轮 <strong>17/20</strong> 没过，
+      定位到两类完全不同的原因，修完 <strong>19/20</strong> 通过。剩下那 1 条，比通过的 19 条更值钱。
+    </p>
+
+    <div class="stats">
+      <div class="stat">
+        <div class="k">语法合规</div>
+        <div class="v ok">19<small>/20</small></div>
+      </div>
+      <div class="stat">
+        <div class="k">字段一致</div>
+        <div class="v">19<small>/20</small></div>
+      </div>
+      <div class="stat">
+        <div class="k">中位耗时</div>
+        <div class="v">39.8<small>s</small></div>
+      </div>
+      <div class="stat">
+        <div class="k">判据</div>
+        <div class="v">≥18<small>/20</small></div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ══════════ TOC ══════════ -->
+  <nav class="toc">
+    <a href="#why"><b>01</b>为什么这一格存在</a>
+    <a href="#pipe"><b>02</b>链路与两道闸</a>
+    <a href="#result"><b>03</b>两轮结果</a>
+    <a href="#debug"><b>04</b>三条失败怎么定位</a>
+    <a href="#fix"><b>05</b>改了什么</a>
+    <a href="#last"><b>06</b>剩下的那条</a>
+    <a href="#qa"><b>07</b>面试会怎么问</a>
+    <a href="#learn"><b>08</b>要学的知识点</a>
+    <a href="#next"><b>09</b>下一步</a>
+  </nav>
+
+  <!-- ══════════ 01 ══════════ -->
+  <section id="why">
+    <div class="sec-head"><span class="sec-num">01</span><h2>为什么这一格存在</h2></div>
+    <p class="sec-sub">不是「跑个测试」，是拿到一段能讲、能追问的经历。</p>
+
+    <p>
+      你的计划里写得很清楚：主投 AI 应用前端，但学习深度按 Agent 开发做。
+      那这类岗位真正卡人的地方，不是会不会调接口，而是<strong>模型输出不可靠时你怎么办</strong>。
+      所有号称「接了 AI」的项目，最后 80% 的工程量都花在这一点上——而大部分人拿不出证据说自己处理过。
+    </p>
+    <p>W2 这一格，恰好一次性给出四件可以摆到台面上的东西：</p>
+
+    <table>
+      <thead>
+        <tr><th style="width:26%">这项能力</th><th style="width:40%">面试会怎么问</th><th>答不上来意味着</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>结构化抽取</strong></td>
+          <td class="mono">怎么保证模型返回的是你要的格式？</td>
+          <td>只会拼 prompt，没有工程手段</td>
+        </tr>
+        <tr>
+          <td><strong>失败归因</strong></td>
+          <td class="mono">不合规的时候你怎么知道是哪个原因？</td>
+          <td>只会“改改 prompt 再试一次”</td>
+        </tr>
+        <tr>
+          <td><strong>校验边界</strong></td>
+          <td class="mono">JSON.parse 过了就算成功吗？</td>
+          <td>不知道格式合法 ≠ 内容正确，会线上出事</td>
+        </tr>
+        <tr>
+          <td><strong>取舍意识</strong></td>
+          <td class="mono">提高合规率付出了什么代价？</td>
+          <td>只会报喜，不讲成本，不可信</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="quote">
+      <p><strong>一句话：</strong>19/20 这个数字本身没有价值，<strong>“17 是怎么变成 19 的、剩下那 1 个为什么不修”</strong>才有价值。前者谁都能报，后者只有真跑过的人讲得出来。</p>
+    </div>
+  </section>
+
+  <!-- ══════════ 02 ══════════ -->
+  <section id="pipe">
+    <div class="sec-head"><span class="sec-num">02</span><h2>链路：两道闸</h2></div>
+    <p class="sec-sub">从一篇 Markdown 到一条可入库的记录，中间隔着两层校验。</p>
+
+    <div class="flow">
+      <div class="flow-row">
+        <div class="node">
+          <div class="n-k">输入</div>
+          <div class="n-v">训练记录 md</div>
+          <div class="n-d">frontmatter<br>+ 动作明细</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="node">
+          <div class="n-k">Prompt</div>
+          <div class="n-v">字段口径固定</div>
+          <div class="n-d">禁止新增/改名<br>自重写 null</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="node">
+          <div class="n-k">模型</div>
+          <div class="n-v">qwen2.5:7b</div>
+          <div class="n-d">temp=0<br>format=json</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="node gate">
+          <div class="n-k">第一道闸</div>
+          <div class="n-v">JSON.parse</div>
+          <div class="n-d">能不能读</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="node gate">
+          <div class="n-k">第二道闸</div>
+          <div class="n-v">Zod 校验</div>
+          <div class="n-d">字段对不对</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="node">
+          <div class="n-k">输出</div>
+          <div class="n-v">ok / 兜底</div>
+          <div class="n-d">永不 500</div>
+        </div>
+      </div>
+
+      <div class="flow-foot">
+        <div>
+          <b>为什么两道闸不够，还要第三层</b>
+          测试脚本额外做了一层<strong>字段比对</strong>：拿本地正则解析的结果当对照，比 <code>date</code> / <code>session</code> / 动作数。只过前两闸不过这层，说明「JSON 合法但内容错」——这正是最后那条失败的样子。
+        </div>
+        <div>
+          <b>为什么 prompt 和校验只有一份</b>
+          <code>src/lib/extract.ts</code> 是唯一出处，HTTP 接口和测试脚本都从它 import。两份口径必然互相漂移，那是上一轮踩过的坑。
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ 03 ══════════ -->
+  <section id="result">
+    <div class="sec-head"><span class="sec-num">03</span><h2>两轮结果</h2></div>
+    <p class="sec-sub">同样的 20 篇、同样的模型，只改了 token 预算和一段 prompt 规则。</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th class="mono" style="width:44%">样本</th>
+          <th class="mono" style="width:16%">第一轮</th>
+          <th class="mono" style="width:16%">第二轮</th>
+          <th class="mono">耗时</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td class="file">11-08 游泳</td><td><span class="chip ok">OK</span></td><td><span class="chip ok">OK</span></td><td class="mono">4.2s</td></tr>
+        <tr><td class="file">11-07 腿A</td><td><span class="chip ok">OK</span></td><td><span class="chip ok">OK</span></td><td class="mono">39.8s</td></tr>
+        <tr><td class="file">11-06 肩+核心</td><td><span class="chip no">FAIL</span></td><td><span class="chip ok">OK</span></td><td class="mono">70.1s</td></tr>
+        <tr><td class="file">11-03 背·拉日</td><td><span class="chip ok">OK</span></td><td><span class="chip ok">OK</span></td><td class="mono">52.8s</td></tr>
+        <tr><td class="file">11-02 胸</td><td><span class="chip ok">OK</span></td><td><span class="chip ok">OK</span></td><td class="mono">47.1s</td></tr>
+        <tr><td class="file">11-01 游泳</td><td><span class="chip ok">OK</span></td><td><span class="chip ok">OK</span></td><td class="mono">5.5s</td></tr>
+        <tr><td class="file">10-31 步行</td><td><span class="chip ok">OK</span></td><td><span class="chip ok">OK</span></td><td class="mono">5.6s</td></tr>
+        <tr><td class="file">10-31 肩+核心</td><td><span class="chip ok">OK</span></td><td><span class="chip ok">OK</span></td><td class="mono">36.6s</td></tr>
+        <tr><td class="file">10-30 腿A</td><td><span class="chip ok">OK</span></td><td><span class="chip ok">OK</span></td><td class="mono">34.6s</td></tr>
+        <tr><td class="file">10-28 游泳</td><td><span class="chip ok">OK</span></td><td><span class="chip ok">OK</span></td><td class="mono">5.7s</td></tr>
+        <tr><td class="file">10-28 背+肩</td><td><span class="chip ok">OK</span></td><td><span class="chip ok">OK</span></td><td class="mono">50.9s</td></tr>
+        <tr><td class="file">10-27 胸+核心</td><td><span class="chip ok">OK</span></td><td><span class="chip ok">OK</span></td><td class="mono">24.2s</td></tr>
+        <tr><td class="file">10-24 游泳</td><td><span class="chip ok">OK</span></td><td><span class="chip ok">OK</span></td><td class="mono">6.1s</td></tr>
+        <tr><td class="file">10-24 背+肩+腹</td><td><span class="chip no">FAIL</span></td><td><span class="chip ok">OK</span></td><td class="mono">90.4s</td></tr>
+        <tr><td class="file">10-22 腿A+腹</td><td><span class="chip no">FAIL</span></td><td><span class="chip no">FAIL</span></td><td class="mono">41.0s</td></tr>
+        <tr><td class="file">10-21 游泳</td><td><span class="chip ok">OK</span></td><td><span class="chip ok">OK</span></td><td class="mono">5.8s</td></tr>
+        <tr><td class="file">10-20 胸</td><td><span class="chip ok">OK</span></td><td><span class="chip ok">OK</span></td><td class="mono">44.3s</td></tr>
+        <tr><td class="file">10-19 背+腹</td><td><span class="chip ok">OK</span></td><td><span class="chip ok">OK</span></td><td class="mono">63.4s</td></tr>
+        <tr><td class="file">10-17 腿A</td><td><span class="chip ok">OK</span></td><td><span class="chip ok">OK</span></td><td class="mono">54.8s</td></tr>
+        <tr><td class="file">10-16 游泳</td><td><span class="chip ok">OK</span></td><td><span class="chip ok">OK</span></td><td class="mono">5.9s</td></tr>
+      </tbody>
+    </table>
+    <p class="tbl-note">耗时列为第二轮。游泳/步行这类 cardio 只要 5–6 秒，负重日 25–90 秒——差距来自输出长度，不是模型不稳定。</p>
+
+    <h3>通过的代价，也得说</h3>
+    <p>
+      中位耗时从 <strong>28.3s 涨到 39.8s</strong>，因为 token 预算从 900 提到 2000，长记录真的会吐更多字。
+      最慢那条（10-24 背+肩+腹）从 56.8s 变 90.4s。<strong>这是修截断必然的代价，不是副作用失控</strong>：
+      短记录不受影响（游泳仍是 5 秒级），因为模型生成到 <code>stop</code> 就停，不会跑满预算。
+    </p>
+    <div class="quote">
+      <p>面试里主动说这句，比说「我优化到了 19/20」可信得多——<strong>能讲清代价的人，才被认为真的在权衡。</strong></p>
+    </div>
+  </section>
+
+  <!-- ══════════ 04 ══════════ -->
+  <section id="debug">
+    <div class="sec-head"><span class="sec-num">04</span><h2>三条失败怎么定位</h2></div>
+    <p class="sec-sub">关键动作只有一个：先看 <code>done_reason</code>，别先改 prompt。</p>
+
+    <div class="case">
+      <div class="case-top">
+        <span class="case-id">FAIL 1</span>
+        <span class="case-name">2026-11-06-训练-01-肩+核心.md</span>
+        <span class="chip no">JSON 解析失败</span>
+      </div>
+      <dl class="kv">
+        <dt>证据</dt>
+        <dd><em>done_reason=length</em>，输出正好 <em>900</em> tok，结尾断在半句话里（<em>2076</em> 字符）</dd>
+        <dt>根因</dt>
+        <dd>不是模型不会，是<strong>话没说完就被掐断</strong>。9 个动作的 JSON 本身就要 900+ token，预算按平均值给必然不够</dd>
+        <dt>处置</dt>
+        <dd>预算提到 2000，同一条 <em>930</em> tok 正常收尾（<em>done_reason=stop</em>）</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <div class="case-top">
+        <span class="case-id">FAIL 2</span>
+        <span class="case-name">2026-10-24-训练-01-背+肩+腹.md</span>
+        <span class="chip no">JSON 解析失败</span>
+      </div>
+      <dl class="kv">
+        <dt>证据</dt>
+        <dd><em>done_reason=length</em>，同样卡在 900 tok</dd>
+        <dt>根因</dt>
+        <dd>与 FAIL 1 完全相同。<strong>两条失败一个原因</strong>，这也是为什么不能一条条改 prompt</dd>
+        <dt>处置</dt>
+        <dd>同上，<em>1155</em> tok 收尾</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <div class="case-top">
+        <span class="case-id">FAIL 3</span>
+        <span class="case-name">2026-10-22-训练-01-腿A（股四主导）+腹.md</span>
+        <span class="chip no">session: Required</span>
+      </div>
+      <dl class="kv">
+        <dt>证据</dt>
+        <dd><em>done_reason=stop</em>——话说完了，但顶层键变成了 <em>trainingSession / workoutPlan / HRV / notes</em></dd>
+        <dt>根因</dt>
+        <dd>prompt 缺 session 取值规则。正文里有「本次训练计划为恢复性训练」这类计划文本，模型被带跑，把 session 吞进 notes 里，自己另起了一套字段名</dd>
+        <dt>处置</dt>
+        <dd>prompt 补一条：优先取 frontmatter，其次取一级标题，<strong>并明确写出“计划说明不是 session 名”</strong>；同时禁止新增字段。重跑仍失败，见第 06 节</dd>
+      </dl>
+    </div>
+
+    <h3>这一步的方法论，比结论重要</h3>
+    <p>
+      三条失败看起来都是「输出不对」，但只有分开看 <code>done_reason</code> 才知道是两类问题：
+      <strong>被截断</strong>（length）和<strong>跑偏</strong>（stop 但内容错）。前者是参数问题，后者是 prompt 问题，
+      修法完全不同。如果三条一起当「模型不行」处理，会去加 few-shot、换模型、上更复杂的 prompt——全是白费。
+    </p>
+    <div class="quote">
+      <p><strong>先分类，再动手。</strong>三个失败样本、两个根因、两个动作。这句话在任何一次线上排障里都成立。</p>
+    </div>
+  </section>
+
+  <!-- ══════════ 05 ══════════ -->
+  <section id="fix">
+    <div class="sec-head"><span class="sec-num">05</span><h2>改了什么</h2></div>
+    <p class="sec-sub">两处，都在 <code>src/lib/extract.ts</code>。注释写清了为什么，防止以后被改回去。</p>
+
+    <span class="code-label">改动一 · token 预算</span>
+<pre><span class="c">// 输出 token 预算。不要再调回 900。</span>
+<span class="c">// 900 时 2/20 被截断（done_reason=length，输出正好 900 tok），</span>
+<span class="c">// 放到 2000 后同样两条 930 / 1155 tok 正常收尾。</span>
+<span class="c">// 9 个动作的 JSON 就要 900+ tok，游泳只要 60 tok ——</span>
+<span class="c">// 按最坏情况给预算，代价只是截断概率归零，不会让短记录变慢。</span>
+<span class="del">- export const NUM_PREDICT = 900;</span>
+<span class="add">+ export const NUM_PREDICT = 2000;</span></pre>
+
+    <span class="code-label">改动二 · prompt 补 session 规则</span>
+<pre><span class="add">+ session 怎么取（必填，不许省）：</span>
+<span class="add">+ - 优先取 frontmatter 的 session 字段原值</span>
+<span class="add">+ - 没有就取一级标题「# YYYY-MM-DD 训练 · XXX」里的 XXX</span>
+<span class="add">+ - 正文里的计划说明、教练备注、恢复性训练这类文字</span>
+<span class="add">+   不是 session 名，不要拿它当 session</span>
+<span class="add">+</span>
+<span class="add">+ 不许新增结构里没有的字段（不是 notes、不是 summary）。</span></pre>
+
+    <p>
+      第二条里那句「<strong>不是 session 名</strong>」是这次唯一带对抗性的写法。
+      光说「从 frontmatter 取」不够——得同时告诉它<strong>什么不许当</strong>，否则模型会从正文里挑一个看起来最像标题的短语顶上。
+    </p>
+  </section>
+
+  <!-- ══════════ 06 ══════════ -->
+  <section id="last">
+    <div class="sec-head"><span class="sec-num">06</span><h2>剩下的那 1 条</h2></div>
+    <p class="sec-sub">它没被修掉，但它证明了整个方案里最要紧的一件事。</p>
+
+    <p>
+      10-22 那篇有 <strong>14 个动作</strong>，是全部样本里最长的一条。补完 prompt 重跑，它依然失败。
+      把原始输出打出来看，模型的顶层键是这样的：
+    </p>
+
+    <div class="bad-keys">
+      <span class="was">date</span>
+      <span>trainingSession</span>
+      <span>workoutPlan</span>
+      <span>HRV</span>
+      <span>restingHeartRate</span>
+      <span>sleepQuality</span>
+      <span>trainingLoad</span>
+      <span>previousLoad</span>
+      <span>previousLoadHistory</span>
+      <span>notes</span>
+    </div>
+
+    <p>
+      它<strong>整篇放弃了 schema，自己发明了一套</strong>——连 <code>date</code> 都编成了 <code>2023-10-23</code>，
+      而记录明明是 2026 年的。这不是「少个字段」，是指在长输入下失去了对齐。
+    </p>
+
+    <h3>为什么这条不能算 pass</h3>
+    <p>
+      如果只做 <code>JSON.parse</code> 不做 Zod，这个输出<strong>会被当成合规收下</strong>：
+      语法完全合法，解析不报错，字段名还挺像那么回事。然后你会得到一条 2023 年的训练记录，混进数据库，几周后没人知道数据为什么不对。
+    </p>
+    <div class="quote">
+      <p><strong>「能解析」不等于「抽对了」。</strong>Zod 是这次唯一拦住它的东西。这也正好是「模型不许改数字」那句原则的实证——不是理论，是拦下来过一次。</p>
+    </div>
+
+    <h3>为什么不现在修</h3>
+    <p>
+      修法至少有三个：① 只喂 frontmatter + 动作明细，不喂计划和点评段落；② 按 5 个动作分块抽再合并；③ 加 few-shot 反例。
+      这三个改法各有代价，而<strong>现在数据不够判断该选哪个</strong>——20 条样本里只有 1 条长记录失败，样本量撑不起结论。
+      下一步该做的是量化「输入长度」和「跑偏概率」的关系，而不是先猜一个改法。
+    </p>
+  </section>
+
+  <!-- ══════════ 07 ══════════ -->
+  <section id="qa">
+    <div class="sec-head"><span class="sec-num">07</span><h2>面试会怎么问</h2></div>
+    <p class="sec-sub">六个真实会被追问的问题。先自己答一遍，再点开对。</p>
+
+    <details>
+      <summary>怎么保证模型返回的是你要的格式？</summary>
+      <div class="ans">
+        <p>三层，缺一层都不够：</p>
+        <p>① <strong>约束生成</strong>——Ollama 的 <code>format: "json"</code>，从解码层面限制只能出 JSON；<br>
+           ② <strong>schema 校验</strong>——Zod 逐字段检查，错就返回 <code>{ok:false, raw, issues}</code>，不抛异常；<br>
+           ③ <strong>内容比对</strong>——格式对了不代表抽对了，还得拿本地解析结果对一遍。</p>
+        <span class="say">只有第一层的话，模型给你一个合法但完全跑偏的 JSON，你一样收下。</span>
+      </div>
+    </details>
+
+    <details>
+      <summary>不合规的时候，你怎么知道是哪个原因？</summary>
+      <div class="ans">
+        <p>看 <code>done_reason</code>。它是 <code>length</code>，说明输出被 token 预算掐断，跟模型能力无关，调预算；
+        它是 <code>stop</code> 但校验不过，才是模型真的没按指令走，要改 prompt 或改输入。</p>
+        <p>这一步决定了后面所有动作的方向。我第一轮三条失败看起来一样，实际是 2 + 1：两条截断、一条跑偏。</p>
+        <span class="say">如果三条一起当「模型不行」，就会去换模型、加 few-shot，全是白费。</span>
+      </div>
+    </details>
+
+    <details>
+      <summary>JSON.parse 过了就算成功吗？</summary>
+      <div class="ans">
+        <p>不算，而且这是最危险的一种失败——它不报错。</p>
+        <p>我有一条 14 个动作的长记录，模型整篇放弃了 schema，自己造了 <code>trainingSession</code>、<code>workoutPlan</code>、<code>HRV</code> 这些键，
+        还把日期编成了 2023 年。语法完全合法。只有 Zod 拦住了它。</p>
+        <span class="say">所以我的接口里 JSON.parse 和 Zod 是两道独立的闸，任何一道不过都走兜底，绝不把原始文本直接入库。</span>
+      </div>
+    </details>
+
+    <details>
+      <summary>为什么不用 <code>generateObject</code> 或更强的模型？</summary>
+      <div class="ans">
+        <p>两个原因，都得说清楚：</p>
+        <p>① <strong>本机约束</strong>——这个项目跑在本地 Ollama 上，7B 是我这台机器的实际算力上限，没有更大模型可选；<br>
+           ② <strong>就算换强的，也得有这层</strong>——强模型只是把失败率从 5% 降到 1%，那 1% 一样要拦。校验层不是弱模型的补丁，是任何模型都要有的闸。</p>
+        <span class="say">反过来说，正因为只有 7B，才逼出了这套定位方法。换 70B 我可能永远不知道 done_reason 能这么用。</span>
+      </div>
+    </details>
+
+    <details>
+      <summary>提高合规率付出的代价是什么？</summary>
+      <div class="ans">
+        <p>延迟。中位耗时从 28.3s 涨到 39.8s，最慢那条从 56.8s 到 90.4s。原因是 token 预算从 900 提到 2000，长记录真的会生成更多字。</p>
+        <p>但短记录不受影响——游泳仍是 5 秒级，因为模型生成到 stop 就停，不会跑满预算。<strong>预算是上限，不是固定开销。</strong></p>
+        <span class="say">所以这个权衡是划算的：代价只落在本来就要慢的长记录上，换来截断概率归零。</span>
+      </div>
+    </details>
+
+    <details>
+      <summary>还剩 1 条没解决，为什么就这样交了？</summary>
+      <div class="ans">
+        <p>因为 19/20 已过判据，而且<strong>现在改是猜，不是判断</strong>。</p>
+        <p>那一类失败至少三种修法：只喂动作明细不喂计划段落、按 5 个动作分块抽、加 few-shot 反例。各有代价，但 20 条样本里只有 1 条长记录失败，这个样本量撑不起「该选哪个」的结论。</p>
+        <p>所以下一步是先量输入长度和失败率的相关性，拿到数据再定。</p>
+        <span class="say">知道什么时候不该动手，比知道怎么动手更难讲，也更能说明你在做工程而不是在做实验。</span>
+      </div>
+    </details>
+  </section>
+
+  <!-- ══════════ 08 ══════════ -->
+  <section id="learn">
+    <div class="sec-head"><span class="sec-num">08</span><h2>要学的知识点</h2></div>
+    <p class="sec-sub">五个，每个都带一个自检问题。答不上就回去补，别往下走。</p>
+
+    <div class="kp">
+      <div class="kp-h"><span class="i">01</span><h4>约束解码 / JSON mode</h4></div>
+      <p>模型生成每个 token 时，其实是在词表上算概率分布。JSON mode 的做法是<strong>把不符合 JSON 语法的 token 概率压成 0</strong>，让它物理上只能吐出合法 JSON。所以它保证的是「语法」，不是「语义」——这正是第 06 节那条失败的原因。</p>
+      <div class="selfcheck"><b>自检</b>　JSON mode 开着，模型还有可能输出不合规的内容吗？可能的话，长什么样？</div>
+    </div>
+
+    <div class="kp">
+      <div class="kp-h"><span class="i">02</span><h4>Zod 与「运行时类型」</h4></div>
+      <p>TypeScript 的类型在编译后全部消失，运行时一个都不剩。所以 <code>as TrainingRecord</code> 是<strong>纯谎言</strong>——它不检查任何东西，只是让编译器闭嘴。Zod 是同一份约束的运行时版本：<code>safeParse</code> 不抛异常，返回 <code>{success, data | error}</code>，正好适合接口边界。</p>
+      <div class="selfcheck"><b>自检</b>　<code>JSON.parse(x) as Foo</code> 和 <code>FooSchema.parse(JSON.parse(x))</code>，哪个会在数据错的时候报警？为什么？</div>
+    </div>
+
+    <div class="kp">
+      <div class="kp-h"><span class="i">03</span><h4>token 预算与 <code>done_reason</code></h4></div>
+      <p><code>num_predict</code> 是输出上限（不是目标值）。模型生成到自然结束会返回 <code>done_reason=stop</code>；撞到上限被掐断则是 <code>length</code>。<strong>这是判断「截断」还是「跑偏」的唯一可靠信号</strong>，比看输出内容猜要准得多。</p>
+      <div class="selfcheck"><b>自检</b>　一条输出 JSON 解析失败，你怎么在 10 秒内判断是预算不够还是模型跑偏？</div>
+    </div>
+
+    <div class="kp">
+      <div class="kp-h"><span class="i">04</span><h4>为什么失败要分类，不能笼统算「准确率」</h4></div>
+      <p>「合规率 85%」这个数字没有指导意义——它不告诉你下一步该改什么。而「2 条截断 + 1 条跑偏」直接指向两个不同的动作。<strong>指标的价值在于能否驱动决策，不在于是否漂亮。</strong>这也是为什么测试脚本要同时报「语法合规」和「字段一致」两个数：它们失败时的修法不同。</p>
+      <div class="selfcheck"><b>自检</b>　如果只报一个「19/20」，你会漏掉什么信息？</div>
+    </div>
+
+    <div class="kp">
+      <div class="kp-h"><span class="i">05</span><h4>单一出处原则（single source of truth）</h4></div>
+      <p>prompt 和校验逻辑各只留一份，HTTP 接口和测试脚本都 import 它。原因不是「代码好看」，而是<strong>两份实现必然漂移</strong>：你改了接口那份忘了改测试那份，测试就会一直绿着，而线上已经错了。这类错误在上一轮真发生过。</p>
+      <div class="selfcheck"><b>自检</b>　如果 route.ts 里单独写了一份 prompt，一周后可能出现什么状况？</div>
+    </div>
+  </section>
+
+  <!-- ══════════ 09 ══════════ -->
+  <section id="next">
+    <div class="sec-head"><span class="sec-num">09</span><h2>下一步</h2></div>
+    <p class="sec-sub">明天（11/15）中档任务，不写代码也能完成。</p>
+
+    <div class="next">
+      <ol>
+        <li><strong>量一遍输入长度</strong>　把这 20 篇的字符数、动作数打出来，看 10-22 那篇是不是真的明显最长。如果它只是略长，说明锅不在长度。</li>
+        <li><strong>把三条失败各重跑 3 次</strong>　同一个输入跑 3 次结果一样吗？<code>temperature=0</code> 下如果还不稳定，说明是模型容量问题，不是随机性。</li>
+        <li><strong>只写结论，不写代码</strong>　一句话：14 个动作的长记录该走分块、还是砍输入、还是加反例。写进 <code>转型学习跟踪.md</code>。</li>
+        <li><strong>补一次 HTTP 层的验证</strong>　沙箱起不了 <code>next dev</code>，得在普通终端里手动起服务，<code>curl</code> 一次 <code>/api/extract</code>，确认 route 和脚本行为一致。</li>
+      </ol>
+    </div>
+
+    <h3>顺带一个环境坑，记下来别再踩</h3>
+    <p>
+      这台机器上沙箱不允许 <code>next dev</code> 写 <code>~/Library/Preferences/nextjs-nodejs/config.json</code>，所以开发服务器起不来。
+      本轮的 20 次测试是<strong>直接请求 Ollama</strong>的，prompt 和 Zod 校验都取自 <code>src/lib/extract.ts</code>（和 route 同一份），
+      所以测的是同一件事，但 <strong>HTTP 那一层没被覆盖</strong>。这条得补。
+    </p>
+  </section>
+
+  <footer>
+    <div class="rule"></div>
+    健身 Agent · W2 结构化输出验收<br>
+    2026-11-14 · 本机 Ollama qwen2.5:7b-instruct · temperature=0 · format=json<br>
+    样本：20 篇真实训练记录（2026-10-16 ~ 2026-11-08）· 判据 ≥18/20 · 实测 19/20
+  </footer>
+
+</div>
+
+</body>
+</html>
