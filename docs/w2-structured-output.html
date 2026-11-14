@@ -239,26 +239,27 @@
     <div class="eyebrow">健身 Agent · W2 验收记录</div>
     <h1>让模型<em>稳定</em>吐 JSON</h1>
     <p class="lede">
-      用本地 7B 模型从 20 篇真实训练记录里抽结构化数据。第一轮 <strong>17/20</strong> 没过，
-      定位到两类完全不同的原因，修完 <strong>19/20</strong> 通过。剩下那 1 条，比通过的 19 条更值钱。
+      用本地 7B 模型从真实训练记录里抽结构化数据。第一轮 <strong>17/20</strong> 没过，修完 <strong>19/20</strong>；
+      把评测收窄到力量记录、再修掉输入侧一处结构歧义，第三轮 <strong>20/20</strong>。
+      中间那两条失败，比通过的 18 条更值钱。
     </p>
 
     <div class="stats">
       <div class="stat">
         <div class="k">语法合规</div>
-        <div class="v ok">19<small>/20</small></div>
+        <div class="v ok">20<small>/20</small></div>
       </div>
       <div class="stat">
         <div class="k">字段一致</div>
-        <div class="v">19<small>/20</small></div>
+        <div class="v ok">20<small>/20</small></div>
       </div>
       <div class="stat">
         <div class="k">中位耗时</div>
-        <div class="v">39.8<small>s</small></div>
+        <div class="v">45.2<small>s</small></div>
       </div>
       <div class="stat">
-        <div class="k">判据</div>
-        <div class="v">≥18<small>/20</small></div>
+        <div class="k">样本</div>
+        <div class="v">20<small>篇力量</small></div>
       </div>
     </div>
   </header>
@@ -267,10 +268,10 @@
   <nav class="toc">
     <a href="#why"><b>01</b>为什么先做这一块</a>
     <a href="#pipe"><b>02</b>链路与两道闸</a>
-    <a href="#result"><b>03</b>两轮结果</a>
+    <a href="#result"><b>03</b>前两轮结果</a>
     <a href="#debug"><b>04</b>三条失败怎么定位</a>
     <a href="#fix"><b>05</b>改了什么</a>
-    <a href="#last"><b>06</b>剩下的那条</a>
+    <a href="#last"><b>06</b>那条后来怎么修的</a>
     <a href="#learn"><b>07</b>关键概念</a>
     <a href="#next"><b>08</b>下一步</a>
   </nav>
@@ -315,7 +316,7 @@
     </table>
 
     <div class="quote">
-      <p><strong>一句话：</strong>19/20 这个数字本身没有价值，<strong>「17 是怎么变成 19 的、剩下那 1 个为什么不修」</strong>才有价值。前者是结果，后者是过程，而过程才能被检验。</p>
+      <p><strong>一句话：</strong>20/20 这个数字本身没有价值，<strong>「17 是怎么变成 20 的、中间两次归因错在哪」</strong>才有价值。前者是结果，后者是过程，而过程才能被检验。</p>
     </div>
   </section>
 
@@ -378,7 +379,7 @@
 
   <!-- ══════════ 03 ══════════ -->
   <section id="result">
-    <div class="sec-head"><span class="sec-num">03</span><h2>两轮结果</h2></div>
+    <div class="sec-head"><span class="sec-num">03</span><h2>前两轮结果</h2></div>
     <p class="sec-sub">同样的 20 篇、同样的模型，只改了 token 预算和一段 prompt 规则。</p>
 
     <table>
@@ -414,6 +415,11 @@
       </tbody>
     </table>
     <p class="tbl-note">耗时列为第二轮。游泳/步行这类 cardio 只要 5–6 秒，负重日 25–90 秒——差距来自输出长度，不是模型不稳定。</p>
+    <p class="tbl-note">
+      <strong>口径问题：</strong>这一轮的 20 篇里有 7 篇是 cardio（游泳/步行）。它们结构极简、只要 60 tok 就够，
+      天然合规，在分母里属于送分。11-15 起评测只收力量记录（口径集中在 <code>scripts/samples.ts</code>），
+      所以第三节是历史记录，第六节才是现在的数字。
+    </p>
 
     <h3>通过的代价，也得说</h3>
     <p>
@@ -521,12 +527,17 @@
 
   <!-- ══════════ 06 ══════════ -->
   <section id="last">
-    <div class="sec-head"><span class="sec-num">06</span><h2>剩下的那 1 条</h2></div>
-    <p class="sec-sub">它没被修掉，但它证明了整个方案里最要紧的一件事。</p>
+    <div class="sec-head"><span class="sec-num">06</span><h2>那条后来怎么修的</h2></div>
+    <p class="sec-sub">当时的判断是「数据不够，先不修」。一天后量了一下输入，判断被推翻。</p>
 
     <p>
-      10-22 那篇有 <strong>14 个动作</strong>，是全部样本里最长的一条。补完 prompt 重跑，它依然失败。
-      把原始输出打出来看，模型的顶层键是这样的：
+      这一条一度被记成「<strong>14 个动作的长记录跑偏</strong>」。真去数才发现：这篇只有 <strong>8 个动作</strong>，
+      比两条通过的记录（10 个）还少；动作明细段 751 字，比几条通过的记录还短；预估输出 860 tok，预算 2000 还剩一大截。
+      三个「长」的解释同时被自己的数据否掉。
+    </p>
+    <p>
+      长的是明细<strong>之后</strong>那 4234 字：一次复盘，六小节，其中一张「下次腿 A 处方」表，
+      列名是动作 / 处方 / 组间 / 调整理由——和训练记录的结构几乎同构。模型于是整篇放弃 schema，顶层键是这样的：
     </p>
 
     <div class="bad-keys">
@@ -556,12 +567,47 @@
       <p><strong>「能解析」不等于「抽对了」。</strong>Zod 是这次唯一拦住它的东西。这也正好是「模型不许改数字」那句原则的实证——不是理论，是拦下来过一次。</p>
     </div>
 
-    <h3>为什么不现在修</h3>
+    <h3>改法：不是调 prompt，是改输入的边界</h3>
     <p>
-      修法至少有三个：① 只喂 frontmatter + 动作明细，不喂计划和点评段落；② 按 5 个动作分块抽再合并；③ 加 few-shot 反例。
-      这三个改法各有代价，而<strong>现在数据不够判断该选哪个</strong>——20 条样本里只有 1 条长记录失败，样本量撑不起结论。
-      下一步该做的是量化「输入长度」和「跑偏概率」的关系，而不是先猜一个改法。
+      三条候选里（只喂记录段 / 按动作分块 / 加 few-shot 反例），选第一条。原因不是它最聪明，是它<strong>最不需要猜</strong>：
+      一篇记录里「哪些字属于这次训练」本来就有边界，`## 动作明细` 之后追加的内容定义上就不属于它。
+      规则按结构写、不按篇写——找第一个记录段标题，切到它之后的第一个二级标题为止。20 篇里每篇只有 1 个二级标题，
+      只有失败那篇有 2 个，所以这条规则实际只影响那一篇，不是给它打特例补丁。
     </p>
+    <p>
+      同一次调用，输入从 5447 字变成 1214 字，Zod 直接通过，<code>date</code> 也回到 2026-10-22。
+      规则落在 <code>buildPrompt</code> 里，接口和测试共用同一份，没有第二处要同步。
+    </p>
+
+    <h3>然后 20/20 还差一步：同名的动作</h3>
+    <p>
+      切完之后，另一篇稳定失败：<code>10-24 背+肩+腹</code>。它每次都跑得最慢（53s → 65s），报错却每次不一样，
+      先是 <code>distance_km: null</code>，再是 <code>reps</code> 不是数字。把原始输出打出来看才明白：
+      这篇里<strong>面拉出现了两次</strong>（热身 10kg×15，正式 17.5kg×12×3）。模型把两处合并成一个动作，
+      又在里面补了一个 <code>"reps": null</code> 的空组去凑数——语义上说得通，schema 上不合法。
+    </p>
+    <p>
+      两处一起改：prompt 加一条「同名动作按出现顺序各算一个，不许合并、不许补空组」；
+      schema 那边把可省字段的 <code>null</code> 归一化成「省略」（<code>null</code> 与缺失同义，但字符串、负数照旧拦）。
+      后者是校准错误：模型表达「文中没给」有两种写法，只认一种是把模型习惯当成数据错误。
+    </p>
+
+    <h3>三轮的账</h3>
+    <table>
+      <thead>
+        <tr><th class="mono" style="width:14%">轮次</th><th class="mono" style="width:12%">结果</th><th style="width:40%">真实原因</th><th>改法</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="mono">11-14 一</td><td><span class="chip no">17/20</span></td><td>输出预算 900 tok 截断 ×2；prompt 没给 session 取法</td><td>预算提到 2000；补 session 规则</td></tr>
+        <tr><td class="mono">11-14 二</td><td><span class="chip no">19/20</span></td><td>同篇里有复盘处方表，模型把处方当成训练记录</td><td>输入侧只喂记录段</td></tr>
+        <tr><td class="mono">11-15 三</td><td><span class="chip ok">20/20</span></td><td>同名动作被合并，补出 <code>reps: null</code> 空组</td><td>prompt 加同名规则；schema 收 <code>null</code></td></tr>
+      </tbody>
+    </table>
+    <p class="tbl-note">第三轮只统计力量记录（20 篇），语法与字段两层都是 20/20，中位耗时 45.2s。</p>
+
+    <div class="quote">
+      <p>两次都是这样：<strong>先把猜测记下来，再用一次 30 秒的测量把它推翻。</strong>归因写错不可怕，可怕的是它写进 README 之后没人再量一遍。</p>
+    </div>
   </section>
 
   <!-- ══════════ 08 ══════════ -->
@@ -603,20 +649,20 @@
   <!-- ══════════ 09 ══════════ -->
   <section id="next">
     <div class="sec-head"><span class="sec-num">08</span><h2>下一步</h2></div>
-    <p class="sec-sub">判据已过，但还有一处未解决。下一步不是马上改，而是先拿到数据。</p>
+    <p class="sec-sub">力量记录已经 20/20。下一步不是把数字再调高，是把范围扩大、把未覆盖的那一层补上。</p>
 
     <div class="next">
       <ol>
-        <li><strong>量一遍输入长度</strong>　把这 20 篇的字符数、动作数打出来，看 10-22 那篇是不是真的明显最长。如果它只是略长，说明锅不在长度。</li>
-        <li><strong>把三条失败各重跑 3 次</strong>　同一个输入跑 3 次结果一样吗？<code>temperature=0</code> 下如果还不稳定，说明是模型容量问题，不是随机性。</li>
-        <li><strong>先写结论，不急着写代码</strong>　一句话：14 个动作的长记录该走分块、还是砍输入、还是加反例。结论先记下来，改法等数据。</li>
-        <li><strong>补一次 HTTP 层的验证</strong>　在本地手动起服务，<code>curl</code> 一次 <code>/api/extract</code>，确认 route 和脚本行为一致。</li>
+        <li><strong>补一次 HTTP 层的验证</strong>　在本地手动起服务，<code>curl</code> 一次 <code>/api/extract</code>，确认 route 和脚本行为一致——这是目前唯一没被覆盖的一层。</li>
+        <li><strong>把样本从 20 篇 搮到全量</strong>　167 篇力量记录里还有 147 篇没过过模型。20 篇能说明稳定，不能说明分布外泛化。</li>
+        <li><strong>同一个失败跑 3 次</strong>　<code>temperature=0</code> 下如果三次结果不同，问题在模型容量或上下文，不在随机性；这条判据以后每次归因前先跑一遍。</li>
+        <li><strong>进 W3：切片与召回</strong>　把记录按标题层级切碎入库，拿当前这套结构化输出当分块正确性的对照。</li>
       </ol>
     </div>
 
     <h3>一处已知限制</h3>
     <p>
-      本轮的 20 次测试是<strong>直接请求 Ollama</strong>的：prompt 与 Zod 校验都取自 <code>src/lib/extract.ts</code>，和 route 用的是同一份，
+      本轮的 20 次测试是<strong>直接请求 Ollama</strong>的：prompt、输入清洗与 Zod 校验都取自 <code>src/lib/extract.ts</code>，和 route 用的是同一份，
       所以验的是同一件事，但 <strong>HTTP 那一层没有被覆盖</strong>。这条单独补。
     </p>
   </section>
@@ -624,8 +670,8 @@
   <footer>
     <div class="rule"></div>
     fitness-agent · 结构化输出验收<br>
-    2026-11-14 · 本机 Ollama qwen2.5:7b-instruct · temperature=0 · format=json<br>
-    样本：20 篇真实训练记录（2026-10-16 ~ 2026-11-08）· 判据 ≥18/20 · 实测 19/20
+    2026-11-15 · 本机 Ollama qwen2.5:7b-instruct · temperature=0 · format=json<br>
+    样本：20 篇力量训练记录（2026-10-08 ~ 2026-11-07）· 语法合规 20/20 · 字段一致 20/20
   </footer>
 
 </div>

@@ -63,17 +63,17 @@
     <a class="card" href="./w2-structured-output.html">
       <div class="top">
         <span class="wk">实测 01</span>
-        <h2>结构化输出：20 次调用合规实测</h2>
+        <h2>结构化输出：力量记录合规实测</h2>
       </div>
       <p>
-        从真实训练记录抽 <code>{动作, 重量, 组数, 次数}</code>。第一轮 17/20 未过，定位到 token 预算与 prompt 两类根因，
-        修完 19/20。剩下那 1 条模型整篇放弃了 schema——这条最值钱。
+        从真实训练记录抽 <code>{动作, 重量, 组数, 次数}</code>。第一轮 17/20，修完 19/20；
+        再把评测收窄到力量记录、修掉输入侧一处结构歧义，第三轮 20/20。失败长什么样，报告里全写了。
       </p>
       <div class="meta">
-        <span>语法合规 <b>19/20</b></span>
-        <span>字段一致 <b>19/20</b></span>
-        <span>中位耗时 39.8s</span>
-        <span>两轮对比</span>
+        <span>语法合规 <b>20/20</b></span>
+        <span>字段一致 <b>20/20</b></span>
+        <span>中位耗时 45.2s</span>
+        <span>三轮对比</span>
       </div>
     </a>
 
