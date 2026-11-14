@@ -45,6 +45,8 @@ JSON 结构（字段口径固定，不得新增/改名）：
 3. record_type 判定：有动作和组数 → "strength"；游泳/跑步等有氧 → "cardio"，此时 exercises 为空数组
 4. 文本没给的字段直接省略，不要编造，不要用 0 顶替
 5. 只输出 JSON 本身
+6. 只抽「动作明细 / 训练摘要」这类记录段的内容。文本里若出现复盘、下次计划、处方表（带组间与调整理由），**一律忽略**，不要把它们当成训练记录
+7. 同一个动作名在一篇里出现多次（热身段与正式段分开写），按出现顺序**各自输出为一个动作**，不要合并、不要去重，也不要为了补齐而补出 "reps": null 这种空组
 
 session 怎么取（必填，不许省）：
 - 优先取文件头部 frontmatter 的 session 字段原值，如 "腿A（股四主导）+腹"
@@ -54,8 +56,43 @@ session 怎么取（必填，不许省）：
 不许新增上面结构里没有的字段（不是 "notes"、不是 "summary"、不是 "muscle_groups"）。
 字段名一个字都不许改。`;
 
+/** 喂给模型的输入上限（字符）。防单篇超长记录把上下文塞爆。 */
+export const MAX_INPUT_CHARS = 6000;
+
+/**
+ * 「记录段」的标题关键词：力量用 `## 动作明细`，有氧用 `## 训练摘要`。
+ * 其余二级标题（复盘、下次计划、备注……）都是写在记录**之后**的东西，不是记录本身。
+ */
+const RECORD_HEADINGS = ["动作明细", "训练摘要"];
+
+/**
+ * 只保留「frontmatter + 标题 + 记录段」，把记录之后追加的二级段切掉。
+ *
+ * 为什么要有这一步（2026-11-15 实测）：`2026-10-22-腿A（股四主导）+腹.md` 是当时
+ * 20 篇里唯一失败的一篇。原归因「14 个动作、输入太长」被实测推翻 —— 动作只有 8 个
+ * （比两条通过的 10 个还少）、明细段仅 751 字、输出估算 860 tok（预算 2000 有余量）。
+ * 真正长的是明细**之外**的 4234 字：`## 教练复盘（2026-10-23 补写）`，其中有一张
+ * 「下次腿 A 处方」表，字段和训练记录几乎同构。模型于是整篇放弃 schema，自造
+ * trainingSession / workoutPlan / HRV，date 编成 2023 年。
+ *
+ * 这是**结构歧义**，不是能力不足：同一篇里有两个看起来都像「一次训练」的结构。
+ * 只喂记录段后，同一篇 5447 → 1214 字，Zod 直接通过。
+ *
+ * 切法按结构、不按篇：找第一个记录段标题，切到它之后的第一个二级标题为止。
+ * 20 篇样本里每篇只有 1 个二级标题，只有失败那篇有 2 个 —— 所以这条规则
+ * 实际只影响那一篇，不是给它打特例补丁。没有记录段标题时整篇照喂，交给 prompt 第 6 条兜。
+ */
+export function trimToRecord(full: string): string {
+  const heads = [...full.matchAll(/^##[ \t]+(.+)$/gm)];
+  const rec = heads.find((h) => RECORD_HEADINGS.some((k) => h[1].includes(k)));
+  if (!rec) return full;
+
+  const after = heads.find((h) => (h.index ?? 0) > (rec.index ?? 0));
+  return after ? full.slice(0, after.index) : full;
+}
+
 export function buildPrompt(text: string): string {
-  return `${SYSTEM_PROMPT}\n\n用户文本：\n${text.slice(0, 6000)}`;
+  return `${SYSTEM_PROMPT}\n\n用户文本：\n${trimToRecord(text).slice(0, MAX_INPUT_CHARS)}`;
 }
 
 export type ExtractResult =

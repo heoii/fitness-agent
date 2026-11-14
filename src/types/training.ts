@@ -15,6 +15,19 @@ import { z } from "zod";
  *           2026-11-08-训练-01-游泳.md（cardio, 无动作明细）
  */
 
+/**
+ * 可省的数字字段。
+ *
+ * 为什么要单独抽：模型表达「文中没给这个值」有两种写法 —— 省略键，或者给 `null`。
+ * 实测第三种失败就来自这里：`2026-10-24-背+肩+腹` 输出了 `"distance_km": null`，
+ * schema 只认「省略」，于是整条记录被判不合规（语法层就挂了，内容其实是对的）。
+ * 拒绝 null 是把「模型习惯」当成「数据错误」，属于校准错了地方。
+ *
+ * 所以：null 与缺失同义 → 归一化成 undefined；但类型错（字符串、负数）照旧拦。
+ */
+const optionalNumber = (schema: z.ZodNumber) =>
+  schema.nullable().optional().transform((v) => v ?? undefined);
+
 /** 单组：重量(kg) + 次数。自重动作 weight 为 null（缺值不当 0 用，判档口径同理） */
 export const SetSchema = z.object({
   weight: z
@@ -25,14 +38,14 @@ export const SetSchema = z.object({
     .number({ invalid_type_error: "次数必须是数字" })
     .int("次数必须是整数")
     .positive("次数必须大于 0"),
-  rest_s: z.number().int().nonnegative().optional(), // 休息秒数，有就填
+  rest_s: optionalNumber(z.number().int().nonnegative()), // 休息秒数，有就填
 });
 
 /** 单个动作：组数 = sets.length（不单独存，避免两处口径） */
 export const ExerciseSchema = z.object({
   name: z.string().trim().min(1, "动作名不能为空"),
   sets: z.array(SetSchema).min(1, "至少要有一组"),
-  volume: z.number().nonnegative().optional(), // 容量，文中有时直接给出
+  volume: optionalNumber(z.number().nonnegative()), // 容量，文中有时直接给出
 });
 
 export const TrainingRecordSchema = z.object({
@@ -41,9 +54,9 @@ export const TrainingRecordSchema = z.object({
     .regex(/^\d{4}-\d{2}-\d{2}$/, "日期格式必须是 YYYY-MM-DD"),
   session: z.string().trim().min(1), // "腿A" / "游泳"
   record_type: z.enum(["strength", "cardio"]).default("strength"),
-  duration_min: z.number().positive().optional(),
-  calorie: z.number().nonnegative().optional(),
-  distance_km: z.number().nonnegative().optional(), // 仅 cardio
+  duration_min: optionalNumber(z.number().positive()),
+  calorie: optionalNumber(z.number().nonnegative()),
+  distance_km: optionalNumber(z.number().nonnegative()), // 仅 cardio
   exercises: z.array(ExerciseSchema).default([]), // cardio → []
 });
 
