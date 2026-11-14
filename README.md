@@ -5,20 +5,18 @@
 
 **实测报告（可直接看）：https://heoii.github.io/fitness-agent/**
 
-**第一次打开？先读 [START-HERE.md](./START-HERE.md)。**那里有阅读路线、五个动手实验、和怎么一键跑测试。
-
 ---
 
 ## 当前进度
 
 | 阶段 | 目标 | 状态 |
 |---|---|---|
-| W1 | 环境跑通，接口能返回中文 | 已完成 |
-| **W2** | **结构化输出：20 次调用 ≥18 次合规** | **19/20 通过**（2026-11-14） |
-| W3 | 知识库 md 按标题层级切片 | 未开始 |
-| W4–W7 | 向量入库 → 召回 ≥70% → 流式 → 中断 | 未开始 |
-| W8–W9 | 控制循环骨架 → 循环可停 | 未开始 |
-| W10–W12 | 评测集 → 基线表 → 部署上线 | 未开始 |
+| ① 接口打通 | 本地模型能返回中文 | 已完成 |
+| **② 结构化输出** | **20 次调用 ≥18 次合规** | **19/20**（2026-11-14） |
+| ③ 切片与召回 | md 按标题层级切片 → 向量入库 → 召回 ≥70% | 未开始 |
+| ④ 流式与中断 | 流式输出，可随时中断 | 未开始 |
+| ⑤ 控制循环 | 循环骨架 → 循环可停 | 未开始 |
+| ⑥ 评测与上线 | 评测集 → 基线表 → 部署 | 未开始 |
 
 ## 它是怎么工作的
 
@@ -54,8 +52,8 @@ src/types/training.ts        65 行   记录长什么样（Zod schema）
 src/lib/extract.ts           83 行   prompt + 两道校验，唯一出处
 src/app/api/extract/route.ts 69 行   HTTP 接口
 scripts/compliance.ts       169 行   20 次合规统计
-docs/w2-structured-output.html       验收报告页（给人看）
-START-HERE.md                        给人看的入口
+docs/w2-structured-output.html       验收报告页
+docs/index.html                      GitHub Pages 入口
 ```
 
 ## 已知未解决
@@ -75,5 +73,5 @@ START-HERE.md                        给人看的入口
 
 ## 环境备注
 
-macOS 沙箱不允许 `next dev` 写 `~/Library/Preferences/nextjs-nodejs/config.json`，
-所以有些环境里开发服务器起不来。此时用测试脚本直接打 Ollama 也能验同一件事（共用同一份 prompt 与校验）。
+如果 `next dev` 在你的环境里起不来（比如写配置目录被拦），可以直接用测试脚本打 Ollama。
+它和接口共用同一份 prompt 与校验（`src/lib/extract.ts`），验的是同一件事，只是不走 HTTP 那一层。
