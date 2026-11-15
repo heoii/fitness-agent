@@ -153,12 +153,23 @@ async function main(): Promise<void> {
   const keyOf = (c: Chunk) => `${c.doc.rel}#${c.headingPath.join(" > ")}#${c.part ?? 0}`;
   const mismatch = titleChunks.filter((c, i) => store.items[i]?.key !== keyOf(c)).length;
   if (mismatch) {
-    console.error(
-      `✗ 向量库与当前切分不一致（${mismatch}/${titleChunks.length} 条 key 不同）。\n` +
-        `  语料或切分逻辑改过了，先跑 npm run w5:index -- --force`
+    // 语料是**活的**：知识库每天在写，索引建完几分钟就可能差一两条。
+    // 差 1/3039 条不影响任何统计结论，但会让人无法评测；差多了才是真的过期。
+    // 所以给一个 1% 的容忍度，并且**每次运行都把这个数打出来**——
+    // 悄悄放行和直接退出都不对：前者会让"索引过期"变成隐形错误，后者让评测跑不起来。
+    const ratio = mismatch / titleChunks.length;
+    if (ratio > 0.01) {
+      console.error(
+        `✗ 向量库与当前切分不一致（${mismatch}/${titleChunks.length} 条 key 不同，${(ratio * 100).toFixed(1)}%）。\n` +
+          `  语料或切分逻辑改过了，先跑 npm run w5:index -- --force`
+      );
+      process.exitCode = 1;
+      return;
+    }
+    console.warn(
+      `⚠ 向量库与当前切分有 ${mismatch}/${titleChunks.length} 条不一致（${(ratio * 100).toFixed(2)}%，` +
+        `在建库之后新写入的记录），低于 1% 容忍度，继续。下面的数字按 ${store.count} 条索引算。`
     );
-    process.exitCode = 1;
-    return;
   }
 
   // ——— 标注可行性检查：答案是不是真的在库里 ———

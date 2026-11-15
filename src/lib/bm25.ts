@@ -20,18 +20,26 @@ export interface BM25Doc {
 }
 
 const CJK = /[\u4e00-\u9fff]/;
-const WORD = /[a-z0-9]+/gi;
+// × 也算词内字符，否则「8×8」会被切成「8」「8」两个 token（见下面的注释）
+const WORD = /[a-z0-9×]+/gi;
 
 /** 归一化 + 切成检索单元。中文出 bigram，英文数字出小写词。 */
 export function tokenize(s: string): string[] {
   const out: string[] = [];
   const lower = s.toLowerCase();
-  for (const run of lower.match(/[\u4e00-\u9fff]+|[a-z0-9]+/g) ?? []) {
+  for (const run of lower.match(/[\u4e00-\u9fff]+|[a-z0-9×]+/g) ?? []) {
     if (CJK.test(run)) {
       if (run.length === 1) out.push(run);
       else for (let i = 0; i + 1 < run.length; i++) out.push(run.slice(i, i + 2));
     } else {
-      for (const w of run.match(WORD) ?? []) out.push(w);
+      for (const w of run.match(WORD) ?? []) {
+        // 丢掉单字符数字。实测：整库里「8」出现在 66.4% 的块里、「5」在 74.1%
+        // （重量、卡路里、日期里全是数字），它们不提供任何区分度，却让
+        // 「8×8 和 5×5 的区别」这种 query 的排序退化成纯噪声 —— 实测 top8 全是饮食明细。
+        // 下面把 × 纳入词内字符后，「8×8」会保持为一个整体 token 而不是被拆成两个「8」。
+        if (w.length === 1 && w >= "0" && w <= "9") continue;
+        out.push(w);
+      }
     }
   }
   return out;
