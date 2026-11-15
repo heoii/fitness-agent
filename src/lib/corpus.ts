@@ -100,7 +100,13 @@ export function parseFrontmatter(text: string): {
 }
 
 export function loadDoc(path: string, root?: string): Doc {
-  const text = readFileSync(path, "utf8");
+  const raw = readFileSync(path, "utf8");
+  // 统一换行符，**不是洁癖**：语料里 235/989 篇是 CRLF（Windows 端写的），
+  // 而 `split("\n")` 之后每行末尾还挂着 `\r`。标题正则的 `(.*)$` 里 `.` 不匹配
+  // `\r`、`$` 又只认整串结尾，于是这些文件的**每一个标题都匹配失败**：
+  // 整篇塌成一个无标题大块、headingPath 变空、检索时引用不到任何小节。
+  // 这种错很安静——chunk 数不会崩、每个块都有正文，只有标题结构没了。
+  const text = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const { fm, body } = parseFrontmatter(text);
   const name = path.split("/").pop() ?? path;
   const fmDate = typeof fm.date === "string" ? fm.date : null;

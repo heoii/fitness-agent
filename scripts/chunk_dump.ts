@@ -104,6 +104,22 @@ if (target) {
   legDetail = `${cs.length} 个 chunk（含 1 个文档级），其中三层路径 ${three.length} 个、首行是「组1」${startsWithSet.length} 个`;
 }
 
+// —— 判据 4 的数据：有标题的文档却切出「空路径」块 ——
+// 这一条必须**不依赖**上面那个标题正则，否则会自指：用同一个正则核对它自己，
+// 两边同时失败就会互相印证成「正确」。用 `m` 标志的独立正则探一下就算。
+const headingLoss: string[] = [];
+let lossChars = 0;
+for (const d of docs) {
+  if (!/^#{1,6}\s+\S/m.test(d.body)) continue;
+  const empty = chunkDoc(d).filter((c) => c.headingPath.length === 0);
+  if (!empty.length) continue;
+  for (const c of empty) lossChars += c.chars;
+  if (headingLoss.length < 3) {
+    headingLoss.push(`${d.name}（${empty.length} 块 / ${empty.reduce((a, c) => a + c.chars, 0)} 字）`);
+  }
+}
+const lossDocs = docs.filter((d) => /^#{1,6}\s+\S/m.test(d.body) && chunkDoc(d).some((c) => c.headingPath.length === 0)).length;
+
 const checks: Array<[string, boolean, string]> = [
   [
     "headingPath 每一级都真出现在本文档标题行里",
@@ -112,6 +128,11 @@ const checks: Array<[string, boolean, string]> = [
   ],
   ["chunk 数 > 文档数（确实切开了，不是整篇一块）", total > docs.length, `${total} vs ${docs.length}`],
   ["11-07 腿A 切出 8 个动作块，路径三层，正文以组1 开头", legOk, legDetail],
+  [
+    "有标题的文档不许切出空路径块（换行符/正则回归）",
+    lossDocs === 0,
+    lossDocs === 0 ? "全部有路径" : `${lossDocs} 篇丢失标题结构，共 ${lossChars} 字无路径；例：${headingLoss.join("；")}`,
+  ],
 ];
 
 console.log("\n判据:");
