@@ -77,48 +77,87 @@ TEXT_EXT = (".ts", ".tsx", ".js", ".jsx", ".json", ".md", ".html", ".css", ".yml
 SCAN_SKIP = ("scripts/git_sync.py",)
 
 
+# 本机常见代理端口：Clash 7890/7897、Surge 6152、V2Ray 1087/1080、其他 8889
+LOCAL_PROXY_PORTS = (7890, 7897, 1087, 8889, 1080, 6152)
+_PROXY_CACHE = []          # 单元素缓存，None 也缓存（避免重复扫端口）
+
+
 def git(*args, check=False):
-    p = subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True,
-                       encoding="utf-8", errors="replace")
+    p = subprocess.run(["git", *_proxy_args(), *args], cwd=ROOT, capture_output=True,
+                       text=True, encoding="utf-8", errors="replace")
     if check and p.returncode != 0:
         raise SystemExit("✗ git %s 失败：\n%s" %
                          (" ".join(args), (p.stderr or p.stdout or "").strip()))
     return p
 
 
+def _port_open(host, port, timeout=0.35):
+    s = socket.socket()
+    s.settimeout(timeout)
+    try:
+        s.connect((host, port))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
 def proxy_target():
-    p = git("config", "--get", "http.https://github.com.proxy")
+    """返回 (host, port, 来源) 或 None。
+
+    来源两种：`配置` = git 里写了 http.https://github.com.proxy；
+    `自动发现` = 没写，但本机常见端口上有人在监听。
+
+    为什么要自动发现：原先「没配代理」被当成「直连没问题」，于是 pull 失败只抛
+    `Empty reply from server` —— 实际是直连被墙、代理开着但没配进 git，报错完全
+    没法行动。探测到就用 `-c http.proxy=…` 临时带上，不改任何全局配置。
+    """
+    if _PROXY_CACHE:
+        return _PROXY_CACHE[0]
+    found = None
+    p = subprocess.run(["git", "config", "--get", "http.https://github.com.proxy"],
+                       cwd=ROOT, capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
     url = (p.stdout or "").strip()
-    if not url:
-        return None
-    hostport = url.split("//", 1)[-1].rstrip("/")
-    if not hostport:
-        return None
-    if ":" in hostport:
-        host, port = hostport.rsplit(":", 1)
-        try:
-            return host or "127.0.0.1", int(port)
-        except ValueError:
-            return None
-    return hostport, 80
+    if url:
+        hostport = url.split("//", 1)[-1].rstrip("/")
+        if hostport:
+            if ":" in hostport:
+                host, port = hostport.rsplit(":", 1)
+                try:
+                    found = (host or "127.0.0.1", int(port), "配置")
+                except ValueError:
+                    found = None
+            else:
+                found = (hostport, 80, "配置")
+    if not found:
+        for port in LOCAL_PROXY_PORTS:
+            if _port_open("127.0.0.1", port):
+                found = ("127.0.0.1", port, "自动发现")
+                break
+    _PROXY_CACHE.append(found)
+    return found
+
+
+def _proxy_args():
+    """只有「自动发现」的代理需要临时注入；写进 git 配置的它自己会读。"""
+    t = proxy_target()
+    if not t or t[2] != "自动发现":
+        return []
+    url = "http://%s:%d" % (t[0], t[1])
+    return ["-c", "http.proxy=" + url, "-c", "https.proxy=" + url]
 
 
 def proxy_alive():
-    """(True/False/None, 说明)。None = 没配代理，直连能通就不用管。"""
-    target = proxy_target()
-    if not target:
-        return None, "未配置 GitHub 代理（直连能通就行）"
-    host, port = target
-    host = "127.0.0.1" if host in ("", "localhost") else host
-    s = socket.socket()
-    s.settimeout(0.8)
-    try:
-        s.connect((host, port))
-        return True, "%s:%d 在监听" % (host, port)
-    except OSError as e:
-        return False, "%s:%d 连不上（代理没开？%s）" % (host, port, e)
-    finally:
-        s.close()
+    """(True/False/None, 说明)。None = 连本地都没找到代理。"""
+    t = proxy_target()
+    if not t:
+        return None, "没找到代理（直连不通时：开代理，或配 http.https://github.com.proxy）"
+    host, port, src = t
+    if _port_open(host, port):
+        return True, "%s:%d 在监听（%s）" % (host, port, src)
+    return False, "%s:%d 连不上（%s，代理没开？）" % (host, port, src)
 
 
 def in_progress():
