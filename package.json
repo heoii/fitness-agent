@@ -17,7 +17,9 @@
     "w5:index": "tsx scripts/build_index.ts",
     "w5:eval": "tsx scripts/eval_retrieval.ts",
     "w5:qa": "tsx scripts/structured_qa.ts",
-    "w6:latency": "tsx scripts/latency_probe.ts"
+    "w6:latency": "tsx scripts/latency_probe.ts",
+    "w6:llm": "tsx scripts/llm_probe.ts",
+    "w6:debug": "tsx scripts/query_debug.ts"
   },
   "dependencies": {
     "next": "16.4.6",
