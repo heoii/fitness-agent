@@ -12,7 +12,8 @@
     "test:20": "tsx scripts/compliance.ts --n 20",
     "w3:stats": "tsx scripts/corpus_stats.ts",
     "w3:chunk": "tsx scripts/chunk_dump.ts",
-    "w3:parse": "tsx scripts/parse_training.ts"
+    "w3:parse": "tsx scripts/parse_training.ts",
+    "w4:embed": "tsx scripts/embed_sample.ts"
   },
   "dependencies": {
     "next": "16.4.6",
