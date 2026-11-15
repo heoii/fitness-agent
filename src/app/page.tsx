@@ -27,6 +27,8 @@ interface Citation {
   headingPath: string[];
   snippet: string;
   score: number;
+  /** 命中的是某节下的小问时，标出「第 i/N 个」（W12） */
+  section?: { parent: string; total: number; index: number; siblings: string[] };
 }
 
 interface Check {
@@ -260,6 +262,14 @@ export default function Home() {
                     <div className={styles.citeTop}>
                       <span className={styles.citeN}>{c.n}</span>
                       <span className={styles.citeLabel}>{c.label}</span>
+                      {c.section && (
+                        <span
+                          className={styles.citeSection}
+                          title={`这一节共 ${c.section.total} 个小问：${c.section.siblings.join("｜")}`}
+                        >
+                          第 {c.section.index}/{c.section.total} 问
+                        </span>
+                      )}
                       <span className={styles.citeScore}>{c.score}</span>
                     </div>
                     <div className={styles.citeSnippet}>{c.snippet}</div>

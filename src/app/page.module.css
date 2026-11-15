@@ -226,6 +226,24 @@
   color: var(--ink-3);
 }
 
+/*
+ * 「本节 i/N 个小问」的角标。
+ * 用 outline 而不是填充：它是一句**限定**（这条只管这一小问），不是一条状态。
+ * 放在 label 后面而不是单独一行，是为了让「这一条属于哪一节」和标题连在一起读——
+ * 分开看的时候，人也会像模型一样把并列小问当成同一件事。
+ */
+.citeSection {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--ink-3);
+  white-space: nowrap;
+  cursor: help;
+}
+
 /* ── 状态条 ── */
 .meta {
   margin-top: 22px;

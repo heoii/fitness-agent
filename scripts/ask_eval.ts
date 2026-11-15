@@ -45,10 +45,43 @@ interface Q {
   expectNums?: number[];
   /** stale 时，期望走哪条入口（用来抓「意图过宽」：问具体动作却答了全局排行） */
   expectRoute?: "retrieve" | "trend" | "count" | "latest" | "compare" | "stale";
+  /**
+   * 必须引到标题里含这些串的段落（判据 I）。
+   *
+   * 为什么不看措辞只看引用：模型换个说法把同一件事说对，是正常的；
+   * 而**引到哪一小问**是结构事实，措辞变了也不会变。
+   * A1 的正确答案在「归因：三个动作同一个机制」，而同节还有
+   * 「下次课的三处改动」「明天（11-03 拉日）怎么办」——后两条也在 top5 里，
+   * 拿它们答「为什么」会得到一段读起来很顺、但答的是另一个问题的答案。
+   */
+  mustCiteLabel?: string[];
 }
 
 const QUESTIONS: Q[] = [
   { id: "A1", q: "为什么我练胸的时候脖子会酸？", kind: "answerable", expectDoc: "2026-11-02-健康记录" },
+  {
+    id: "A8",
+    q: "练胸为什么脖子会酸",
+    kind: "answerable",
+    expectDoc: "2026-11-02-健康记录",
+    mustCiteLabel: ["归因"],
+    /*
+     * A8 和 A1 是**同一意图的两种问法**，必须分开看，别合并：
+     *
+     *   A8「练胸为什么脖子会酸」（短句）→ top5 是父节 + 归因/下次课等子节，对的。
+     *   A1「为什么我练胸的时候脖子会酸？」（原话）→ top5 混进
+     *      「fitness-agent 上手说明」「双机协作约定」「RAG」，归因压根不在里面。
+     *
+     * 原因不是清洗不够，是语料里的词表冲突：「练胸」在动作名里是后缀
+     * （`双杠臂屈伸-练胸（kg）`，10 块），短块靠这一个稀有词就能压过
+     * 命中「脖子+酸」两个词的长块；而「归因」那段正文写的是「胸椎伸展 / 枕下肌群」，
+     * **既没有「练胸」也没有「脖子」**，它进 top5 全靠标题路径里带着这几个字。
+     *
+     * 所以 A8 测的是「父子节标注管不管用」，A1 测的是「检索对措辞有多敏感」——
+     * 后者是 README 里记了很久的已知缺口，不在 W12 范围内，也别让它的红
+     * 去污染父子节这条判据。两件事分开记，才不会互相掩护。
+     */
+  },
   {
     id: "A2",
     q: "减载期、恢复期、增长期的门槛分别是什么",
@@ -311,6 +344,16 @@ async function main() {
   const stale = rows.filter((x) => x.q.kind === "stale" && x.r.ok);
   const staleN = stale.filter((x) => staleOk(x.r, x.q)).length;
 
+  /*
+   * I. 小节题必须引到对的那一小问（W12）。
+   *    不判措辞，只判引用落在哪个子标题——「归因」被引到了，说明模型读的是原因；
+   *    只引到「明天怎么办」的答案，读起来同样通顺，但那是在答另一个问题。
+   */
+  const secQ = rows.filter((x) => (x.q.mustCiteLabel?.length ?? 0) > 0 && x.r.ok);
+  const secN = secQ.filter((x) =>
+    (x.q.mustCiteLabel ?? []).every((m) => x.r.citations.some((c) => c.label.includes(m)))
+  ).length;
+
   // 分母为 0 时写「未覆盖」而不是 0/0 然后算通过——--only=C 那次就是这么
   // 显示「✓ A–D 全过」的，实际上 A–D 一条都没跑。空洞通过比失败更危险。
   const frac = (n: number, d: number) => (d === 0 ? "未覆盖" : `${n}/${d}`);
@@ -322,6 +365,7 @@ async function main() {
   const F = `${frac(reframeN, reframe.length)}（必须指出「不是一回事」，且答到具体内容）`;
   const G = `${frac(aggN, agg.length)}（count/compare 路由 + 数字对真值）`;
   const H = `${frac(staleN, stale.length)}（路由对 + 关键内容出现）`;
+  const I = `${frac(secN, secQ.length)}（问原因须引到「归因」那一小问）`;
   const avg = (ok.reduce((s, x) => s + x.r.meta.ms.total, 0) / (ok.length || 1) / 1000).toFixed(1);
 
   console.log("\n" + "=".repeat(78));
@@ -333,14 +377,16 @@ async function main() {
   console.log(`F 前提有误时会纠正          ${F}`);
   console.log(`G 聚合类走工具且数对        ${G}`);
   console.log(`H 荒废类路由与内容都对      ${H}`);
+  console.log(`I 小节题引到对的小问        ${I}`);
   console.log(`  平均端到端              ${avg} s（本机 7B，同步非流式）`);
 
   const groupOk = (n: number, d: number) => d === 0 || n === d;
   const pass = groupOk(invalidFree, ok.length) && groupOk(labelOkN, needsCite.length) &&
     groupOk(citedN, answerable.length) && groupOk(absentN, absent.length) && groupOk(mathN, math.length) &&
-    groupOk(reframeN, reframe.length) && groupOk(aggN, agg.length) && groupOk(staleN, stale.length);
-  const covered = [ok.length > 0, needsCite.length > 0, answerable.length > 0, absent.length > 0, math.length > 0, reframe.length > 0, agg.length > 0, stale.length > 0].filter(Boolean).length;
-  console.log(`\n${pass ? "✓ 全过" : "✗ 有判据未过"}（覆盖 ${covered}/8 组判据）`);
+    groupOk(reframeN, reframe.length) && groupOk(aggN, agg.length) && groupOk(staleN, stale.length) &&
+    groupOk(secN, secQ.length);
+  const covered = [ok.length > 0, needsCite.length > 0, answerable.length > 0, absent.length > 0, math.length > 0, reframe.length > 0, agg.length > 0, stale.length > 0, secQ.length > 0].filter(Boolean).length;
+  console.log(`\n${pass ? "✓ 全过" : "✗ 有判据未过"}（覆盖 ${covered}/9 组判据）`);
 
   /*
    * 分类准确率 + 未达标明细。
@@ -352,7 +398,11 @@ async function main() {
    */
   const good = (x: Row): boolean => {
     if (!x.r.ok) return false;
-    if (x.q.kind === "answerable") return x.r.check.refs.length > 0 && !x.r.check.noAnswer && x.labelOk;
+    // mustCiteLabel 是叠加条件：A1 除了「有引用」，还必须引到「归因」那一小问。
+    // 写成先判后加，避免把它塞进某个 kind 分支里、换个 kind 就悄悄失效。
+    const citeHit = (x.q.mustCiteLabel ?? []).every((m) => x.r.citations.some((c) => c.label.includes(m)));
+    if (x.q.kind === "answerable")
+      return x.r.check.refs.length > 0 && !x.r.check.noAnswer && x.labelOk && citeHit;
     if (x.q.kind === "absent") return x.r.check.noAnswer;
     if (x.q.kind === "reframe") return reframeOk(x.r, x.q.mustMention);
     if (x.q.kind === "aggregate") return aggregateOk(x.r, x.q.expectNums);

@@ -36,6 +36,29 @@ export interface Hit {
   bm25: number;
   /** 时间因子，1 = 刚刚，越小越旧 */
   recency: number;
+  /**
+   * 这条是某节下的**第几个小问**（W12）。只有 `headingPath.length >= 2`
+   * 且同父节的小问数 `>= 2` 时才有值。
+   *
+   * 为什么必须有这个字段：问「练胸为什么脖子酸」时，top5 里 4 条来自同一个父节
+   * （`## 颈部反应：为什么这节胸课会把脖子练酸`），其中「归因」才是答案，
+   * 而「明天（11-03 拉日）怎么办」排第 6 —— 对模型来说它们长得一模一样，
+   * 都是「颈部反应 > 某个子标题」。7B 看到「怎么办」就答了怎么办。
+   * 摆在前面的资料没有错，**错的是没有告诉模型这几条是同一节的并列小问**。
+   */
+  section?: SectionSlot;
+}
+
+/** 一条资料在它所属小节里的位置。全部由代码算，不进 prompt 的推理。 */
+export interface SectionSlot {
+  /** 父节标题（headingPath 的倒数第二段） */
+  parent: string;
+  /** 本节共几个小问 */
+  total: number;
+  /** 本条是第几个（从 1 起，按原文顺序） */
+  index: number;
+  /** 本节所有小问的标题，按原文顺序；用来告诉模型「还有哪些角度，而你手上没有」 */
+  siblings: string[];
 }
 
 export interface IndexMeta {
@@ -54,6 +77,8 @@ export function inspectQuery(q: string): { raw: string; cleaned: string; timeHin
 interface Built {
   bm25: BM25Index;
   chunks: Chunk[];
+  /** `docPath\0父路径` → 该父节下所有小问标题（有序、去重） */
+  sections: Map<string, string[]>;
   builtMs: number;
   docs: number;
   dir: string;
@@ -105,11 +130,56 @@ function build(): Built {
   return {
     bm25,
     chunks,
+    sections: buildSections(chunks),
     builtMs: performance.now() - t0,
     docs,
     dir: dirs.join(","),
     builtAt: new Date().toISOString(),
   };
+}
+
+/** 父节 key：同一篇文档 + 同一父路径才算「同一节」，不同文档的同名标题不能混。 */
+const SECTION_SEP = "\u0000";
+
+function sectionKey(docPath: string, parent: string[]): string {
+  return docPath + SECTION_SEP + parent.join(SECTION_SEP);
+}
+
+/**
+ * 建库时一次性算出「每个父节下有哪几个小问」。
+ *
+ * 放在建库阶段而不是每次检索时现算：`5600+` 块 × 每个命中块都要扫全库，
+ * 单次查询会多出几毫秒，而这张表跟语料一样是静态的。
+ *
+ * 只统计 `headingPath.length >= 2` 的块：`## 摘要` 这种顶层块自己就是节，
+ * 没有「第几个小问」可言。父节自身的前置正文块（比子节少一段）也自然被排除。
+ */
+function buildSections(chunks: Chunk[]): Map<string, string[]> {
+  const map = new Map<string, string[]>();
+  for (const c of chunks) {
+    if (c.headingPath.length < 2) continue;
+    const key = sectionKey(c.doc.path, c.headingPath.slice(0, -1));
+    const leaf = c.headingPath[c.headingPath.length - 1];
+    const arr = map.get(key);
+    if (!arr) {
+      map.set(key, [leaf]);
+    } else if (!arr.includes(leaf)) {
+      // 超长块被硬切成 part 1/2，两个 chunk 共用同一个 heading——只记一次
+      arr.push(leaf);
+    }
+  }
+  return map;
+}
+
+/** 命中块在它所属小节里的位置；只有一个小问或本身就是顶层节时返回 undefined。 */
+function sectionOf(c: Chunk, sections: Map<string, string[]>): SectionSlot | undefined {
+  if (c.headingPath.length < 2) return undefined;
+  const parent = c.headingPath.slice(0, -1);
+  const siblings = sections.get(sectionKey(c.doc.path, parent));
+  if (!siblings || siblings.length < 2) return undefined;
+  const index = siblings.indexOf(c.headingPath[c.headingPath.length - 1]) + 1;
+  if (index < 1) return undefined;
+  return { parent: parent[parent.length - 1], total: siblings.length, index, siblings };
 }
 
 export function getIndex(): Built {
@@ -209,5 +279,6 @@ export function retrieve(query: string, opts: RetrieveOptions = {}): Hit[] {
     score: s.score,
     bm25: s.bm25,
     recency: s.rec,
+    section: sectionOf(s.chunk, idx.sections),
   }));
 }

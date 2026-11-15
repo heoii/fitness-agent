@@ -9,7 +9,7 @@
  * 「最近一次深蹲重量」，跟 60kg 一比，得出「在涨」——而真实数据是持平或微跌。
  * 所以干脆禁止它算：算数走结构化入口（W7 的工具层），它只负责把数字说成人话。
  */
-import { retrieve, type Hit } from "./retrieve";
+import { retrieve, type Hit, type SectionSlot } from "./retrieve";
 import {
   countTraining,
   latestSession,
@@ -51,6 +51,8 @@ export interface Citation {
   headingPath: string[];
   snippet: string;
   score: number;
+  /** 命中的是某节下的小问时，标出「第 i/N 个」；数值入口的引用来没有这个字段 */
+  section?: SectionSlot;
 }
 
 export interface AskResult {
@@ -103,10 +105,36 @@ export interface Plan {
   trailer?: string;
 }
 
+/**
+ * 一条资料的定位行（W12）。
+ *
+ * 命中子节时补一行「本节 N 小问的第 i 个」，并把同节其他小问的标题列出来。
+ * 这不是排版美化：`[6] … > 明天（11-03 拉日）怎么办` 和 `[3] … > 归因：三个动作同一个机制`
+ * 在模型眼里是同一层级的两段话，而问的是「为什么」——不标出层级，7B 必然拿「怎么办」答「为什么」。
+ */
+function hitHeader(h: Hit): string {
+  const head = `[${h.n}] ${h.label}`;
+  if (!h.section) return head;
+  const s = h.section;
+  const others = s.siblings.filter((x) => x !== s.siblings[s.index - 1]);
+  const short = (t: string) => (t.length > 16 ? `${t.slice(0, 16)}…` : t);
+  const rest = others.length ? `本节还有：${others.map(short).join("｜")}` : "";
+  return `${head}\n    § 本节 ${s.total} 个小问的第 ${s.index} 个${rest ? `。${rest}` : ""}`;
+}
+
 export function buildAskPrompt(hits: Hit[], question: string): string {
   const ctx = hits
-    .map((h) => `[${h.n}] ${h.label}\n${h.text}`)
+    .map((h) => `${hitHeader(h)}\n${h.text}`)
     .join("\n\n");
+  // **不要给「这一小问对不对题」的判断指令**。试过两版，都撞墙：
+  //   第一版给了出口「命中的都是别的小问就说资料里没有」→ A5 拿它当开场白，
+  //     明明命中「关键技术要点」就是答案，却说「资料里没有直接回答这个的段落」；
+  //     A2 更是用这个出口替掉了规则 4 要的「两者不是一回事」。
+  //   第二版改成「先判断它是不是你问的那一问」→ 一样保守，A5 仍然以「没找到」开场。
+  //   A/B 对照（同一批资料、只删标注）证实差异来自这条规则本身。
+  // 根子在于：让 7B 判断「这一小问对不对题」，它判不准，判不准就退回拒答。
+  // 所以只给**事实标注**（本节共 5 问、本条是第 5 个、同节还有哪几问），不给判断权——
+  // 它读得懂并列结构，但别指望它做取舍。这跟「数字由代码算、模型只表述」是同一条纪律。
   return `你是个人健身与健康记录的问答助手。严格按顺序遵守下面的规则：
 
 1. 只依据「资料」回答，不许用你自己知道的知识补充。
@@ -853,6 +881,7 @@ function toCitation(h: Hit, snippetChars = 180): Citation {
     headingPath: h.headingPath,
     snippet: h.text.slice(0, snippetChars),
     score: Number(h.score.toFixed(2)),
+    section: h.section,
   };
 }
 
