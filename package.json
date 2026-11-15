@@ -25,7 +25,9 @@
     "w7:scope": "tsx scripts/corpus_scope_probe.ts",
     "w7:count": "tsx scripts/count_probe.ts",
     "w7:stream": "tsx scripts/stream_probe.ts",
-    "w7:latest": "tsx scripts/latest_probe.ts"
+    "w7:latest": "tsx scripts/latest_probe.ts",
+    "w7:entity": "tsx scripts/entity_probe.ts",
+    "w7:multi": "tsx scripts/multi_probe.ts"
   },
   "dependencies": {
     "next": "16.4.6",

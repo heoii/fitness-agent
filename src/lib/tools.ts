@@ -143,6 +143,72 @@ export function listExercises(): string[] {
   );
 }
 
+/** 动作名去掉括注和破折号后缀：「腿举(倒蹬)」→「腿举」，「绳索高位下拉-窄距」→「绳索高位下拉」 */
+export function coreOf(name: string): string {
+  return name.replace(/[（(].*?[)）]/g, "").replace(/[-—].*$/, "");
+}
+
+/**
+ * 从用户原话里认出动作名。
+ *
+ * 三层尝试，全按**频次降序**（listExercises 已排好），先命中的就是练得最多的那个：
+ *   ① 原话里含完整动作名：「史密斯深蹲」
+ *   ② 原话里含动作主体：「腿举(倒蹬)」→ 用户说「腿举」
+ *   ③ 原话里含动作主体的末两字：用户说「深蹲」，语料里叫「史密斯深蹲」
+ *      —— 这一层是必须的，因为日常说法就是短的
+ *
+ * 从 answer.ts 搬到这儿是因为它属于**实体识别**，不是生成逻辑；
+ * 而且 entitiesIn 要用它，放两处会各调一份、慢慢漂移。
+ */
+export type MatchLayer = "full" | "core" | "tail";
+
+export interface ExerciseMatch {
+  name: string;
+  /** 靠哪一层命中的，决定「要不要报歧义」——见 exerciseSiblings */
+  layer: MatchLayer;
+}
+
+export function matchExerciseEx(q: string): ExerciseMatch | null {
+  const names = listExercises();
+  for (const n of names) if (q.includes(n)) return { name: n, layer: "full" };
+  for (const n of names) {
+    const c = coreOf(n);
+    if (c.length >= 2 && q.includes(c)) return { name: n, layer: "core" };
+  }
+  for (const n of names) {
+    const c = coreOf(n);
+    if (c.length >= 2 && q.includes(c.slice(-2))) return { name: n, layer: "tail" };
+  }
+  return null;
+}
+
+export function matchExercise(q: string): string | null {
+  return matchExerciseEx(q)?.name ?? null;
+}
+
+/**
+ * 同名后缀的**其他**动作。
+ *
+ * 为什么要有：用户说「硬拉」，语料里有杠铃硬拉 / 罗马尼亚硬拉 / 哑铃硬拉 /
+ * 史密斯硬拉 / 哑铃单腿硬拉五种；`matchExercise` 按频次选了「杠铃硬拉」，
+ * 报「最近一次 07-31」。可最近练的那次是**罗马尼亚硬拉（08-22）**。
+ * 两边都有据可查，用户看到的却是个错的答案，而且没有任何迹象提示他选错了。
+ *
+ * 只有走 tail 层（用户只说了末两字）才算歧义：
+ *   「史密斯深蹲」走 full 层，明确；
+ *   「深蹲」走 tail 层，可能就是高脚杯深蹲 —— 该提一句。
+ * 提法是**给默认答案 + 列出其他候选**，不是拒绝回答：
+ * 拒绝会把「深蹲最近涨没涨」这种正常问题也挡掉。
+ */
+export function exerciseSiblings(match: ExerciseMatch, limit = 4): string[] {
+  if (match.layer === "full") return [];
+  const tail = coreOf(match.name).slice(-2);
+  if (tail.length < 2) return [];
+  return listExercises()
+    .filter((n) => n !== match.name && coreOf(n).endsWith(tail))
+    .slice(0, limit);
+}
+
 /**
  * 把用户嘴里的动作名对上语料里的动作名。
  * 精确 → 全长包含 → 用户词是动作名的一部分（取出现次数最多的那个）。
@@ -324,8 +390,7 @@ export function getExerciseTrend(exercise: string, opts: TrendOptions = {}): Tre
     const conflict = v0 !== v1;
     summary = conflict
       ? `「${name}」两个口径结论相反：含热身是「${v0}」（${calibers[0].deltaPct}%），` +
-        `剔除热身是「${v1}」（${calibers[1].deltaPct}%）。差异来自热身组占比（最近几次：${warmupShares}）。` +
-        `**两个都要报，不能只挑一个**，并说明「涨的那部分可能来自热身组」。`
+        `剔除热身是「${v1}」（${calibers[1].deltaPct}%）。差异来自热身组占比（最近几次：${warmupShares}）。`
       : `「${name}」两个口径一致：都是「${v1}」（含热身 ${calibers[0].deltaPct}%，剔除热身 ${calibers[1].deltaPct}%）。` +
         `最近几次热身占比：${warmupShares}。`;
   }
@@ -340,7 +405,7 @@ export function getExerciseTrend(exercise: string, opts: TrendOptions = {}): Tre
     excluded: excluded.map(({ degraded: _d, ...p }) => p),
     calibers,
     summary: excluded.length
-      ? `${summary} 已排除 ${excluded.length} 次降级课（${excluded.map((e) => e.date.slice(5)).join("、")}），混进来会把趋势拉成「在跌」。`
+      ? `${summary} 已排除 ${excluded.length} 次降级课（${excluded.map((e) => e.date.slice(5)).join("、")}），不计入趋势。`
       : summary,
   };
 }
@@ -418,6 +483,58 @@ const MUSCLE_ALIAS: Array<{ re: RegExp; canon: string }> = [
 export function resolveMuscle(q: string): string | null {
   for (const { re, canon } of MUSCLE_ALIAS) if (re.test(q)) return canon;
   return null;
+}
+
+export interface Entity {
+  kind: "muscle" | "exercise";
+  name: string;
+  /**
+   * 同名后缀的其他动作（「硬拉」→ 罗马尼亚硬拉/哑铃硬拉…）。
+   * 非空说明用户说的词不够具体，答案里**必须提一句**，否则他会以为是另一个动作。
+   */
+  siblings: string[];
+}
+
+/**
+ * 问句里的所有并列实体。
+ *
+ * 为什么要这个：工具层是**单实体**的。问「上次腿课和上次胸课分别是什么时候」，
+ * `latestSession` 只拿到「腿」，胸直接消失——不报错、也不承认漏了，
+ * 界面上看起来是个完整答案。这比答错更难发现：答错你会去查，答一半你不会。
+ *
+ * 实现是**先按连接词切、再逐段认实体**，不是全串扫描。理由：
+ * 全串扫描要处理「史密斯深蹲」里含「深蹲」、「腿举」里含「腿」这类重叠，
+ * 切分之后每段只有一个实体，重叠问题自然消失；认不出实体的段直接丢。
+ * 所以像「热量和脂肪怎么分配」这种会被切开，但两段都认不出实体，返回空——
+ * 宁可不认，也不要把非实体当成实体去调工具。
+ */
+const ENTITY_SPLIT = /和|跟|与|、|还有|以及|对比|比较|哪个更|哪一个|分别/g;
+
+export function entitiesIn(q: string): Entity[] {
+  const out: Entity[] = [];
+  const seen = new Set<string>();
+  for (const part of q.split(ENTITY_SPLIT)) {
+    if (!part.trim()) continue;
+    // 动作优先：一段里既有动作名又含部位字时（「腿举」含「腿」），动作更具体
+    const ex = matchExerciseEx(part);
+    if (ex) {
+      const key = `e:${ex.name}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push({ kind: "exercise", name: ex.name, siblings: exerciseSiblings(ex) });
+      }
+      continue;
+    }
+    const mu = resolveMuscle(part);
+    if (mu) {
+      const key = `m:${mu}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push({ kind: "muscle", name: mu, siblings: [] });
+      }
+    }
+  }
+  return out;
 }
 
 const ymd = (d: Date) =>

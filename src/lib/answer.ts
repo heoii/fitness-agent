@@ -14,10 +14,12 @@ import {
   countTraining,
   latestSession,
   getExerciseTrend,
-  listExercises,
+  matchExercise,
+  entitiesIn,
   resolveMuscle,
   resolvePeriod,
   type CountResult,
+  type Entity,
   type LatestResult,
   type TrendResult,
 } from "./tools";
@@ -76,7 +78,7 @@ export type Route = "retrieve" | "trend" | "count" | "latest";
  * 上一版把路由写在 `tryTrend/tryCount` 里、生成紧跟着发生，于是流式要么复制一遍
  * 判断（两份必然漂移），要么把流式硬塞进同步函数。路由和生成是两件事，分开。
  */
-interface Plan {
+export interface Plan {
   route: Route;
   citations: Citation[];
   /** 引用条数上界，`checkAnswer` 用它判越界 */
@@ -86,6 +88,15 @@ interface Plan {
   fixedAnswer?: string;
   retrieveMs: number;
   numPredict: number;
+  /**
+   * 生成之后由**代码**追加的一段，不进 prompt。
+   *
+   * 用它是因为有些事实必须说、但不能交给模型说：歧义提示里带着「罗马尼亚硬拉 08-22」
+   * 这种日期，而这些日期没有引用编号（引用是给主答案准备的），
+   * 让 7B 复述并列日期它一定会选错——A8 那次把「更早一次 11-07」当成答案报出来了。
+   * 凡是模型不该碰的数字，都由代码写。
+   */
+  trailer?: string;
 }
 
 export function buildAskPrompt(hits: Hit[], question: string): string {
@@ -114,51 +125,51 @@ ${ctx}
 /** 问趋势的意图。命中后不进检索——这类问题的答案不在任何一段文字里，得靠算。 */
 const TREND_INTENT = /涨|跌|进步|退步|趋势|提升|变强|变弱/;
 
-/** 动作名去掉括注和破折号后缀：「腿举(倒蹬)」→「腿举」，「绳索高位下拉-窄距」→「绳索高位下拉」 */
-function coreOf(name: string): string {
-  return name.replace(/[（(].*?[)）]/g, "").replace(/[-—].*$/, "");
+/** 一次训练的点位描述，趋势 prompt 里每个明细行都用它 */
+function trendPointLine(p: { date: string; topWeight: number | null; workVolume: number; warmupShare: number }): string {
+  return (
+    `${p.date} 最重${p.topWeight === null ? "自重" : `${p.topWeight}kg`}，工作容量 ${p.workVolume}，` +
+    `热身占 ${(p.warmupShare * 100).toFixed(0)}%`
+  );
 }
+
+/** 一个动作的各口径结论 */
+function trendCaliberLines(t: TrendResult): string {
+  return t.calibers
+    .map(
+      (c) => `- 口径「${c.caliber}」：此前 ${c.beforeAvg} → 最近 ${c.recentAvg}，${c.verdict}（${c.deltaPct}%）
+  口径说明：${c.note}`
+    )
+    .join("\n");
+}
+
+const trendBeforeAvg = (t: TrendResult) =>
+  Math.round(t.before.reduce((s, p) => s + p.workVolume, 0) / (t.before.length || 1));
 
 /**
- * 从用户原话里认出动作名。
+ * 趋势 prompt。单动作时输出**和加多实体之前一字不差**（19 题验收过的是这条路）。
  *
- * 三层尝试，全按**频次降序**（listExercises 已排好），先命中的就是练得最多的那个：
- *   ① 原话里含完整动作名：「史密斯深蹲」
- *   ② 原话里含动作主体：「腿举(倒蹬)」→ 用户说「腿举」
- *   ③ 原话里含动作主体的末两字：用户说「深蹲」，语料里叫「史密斯深蹲」
- *      —— 这一层是必须的，因为日常说法就是短的
+ * 多动作是大模型最容易被绕晕的地方：2 个动作 × 2 个口径 = 4 个百分比，
+ * 只要 prompt 不给每个动作划出清晰的边界，它就会把深蹲的跌幅安到卧推头上。
+ * 所以用 `━━ 对象 N ━━` 硬分块，并且要求「每个对象分开报，不要横向比较」——
+ * 「哪个涨得多」这种比较由用户自己看，不让模型做（它算不准，也不许算）。
  */
-function matchExercise(q: string): string | null {
-  const names = listExercises();
-  for (const n of names) if (q.includes(n)) return n;
-  for (const n of names) {
-    const c = coreOf(n);
-    if (c.length >= 2 && q.includes(c)) return n;
-  }
-  for (const n of names) {
-    const c = coreOf(n);
-    if (c.length >= 2 && q.includes(c.slice(-2))) return n;
-  }
-  return null;
-}
-
-function buildTrendPrompt(t: TrendResult, question: string): string {
-  const fmt = (p: { date: string; topWeight: number | null; workVolume: number; warmupShare: number }) =>
-    `${p.date} 最重${p.topWeight === null ? "自重" : `${p.topWeight}kg`}，工作容量 ${p.workVolume}，` +
-    `热身占 ${(p.warmupShare * 100).toFixed(0)}%`;
-  const cal = t.calibers
-    .map((c) => `- 口径「${c.caliber}」：此前 ${c.beforeAvg} → 最近 ${c.recentAvg}，${c.verdict}（${c.deltaPct}%）
-  口径说明：${c.note}`)
-    .join("\n");
-
-  return `下面这些数字是系统**已经算好**的，准确，直接用，不要重新计算，也不要引入别的数字。
+function buildTrendPrompt(
+  got: TrendResult[],
+  offsets: number[],
+  question: string,
+  empties: string[]
+): string {
+  if (got.length === 1) {
+    const t = got[0];
+    return `下面这些数字是系统**已经算好**的，准确，直接用，不要重新计算，也不要引入别的数字。
 
 动作：${t.exercise}（全库 ${t.totalSessions} 次记录）
 最近 ${t.recent.length} 次（编号与下面的引用一致）：
-${t.recent.map((p, i) => `[${i + 1}] ${fmt(p)}`).join("\n")}
-此前 ${t.before.length} 次平均：工作容量 ${Math.round(t.before.reduce((s, p) => s + p.workVolume, 0) / (t.before.length || 1))}
+${t.recent.map((p, i) => `[${offsets[0] + i}] ${trendPointLine(p)}`).join("\n")}
+此前 ${t.before.length} 次平均：工作容量 ${trendBeforeAvg(t)}
 
-${cal}
+${trendCaliberLines(t)}
 
 系统结论：${t.summary}
 
@@ -168,6 +179,57 @@ ${cal}
 3. 不许只挑一个好看的结论。
 4. 至少用 [n] 引用一条明细，编号对应上面方括号里的数字。
 5. 用中文，不超过 150 字。
+
+问题：${question}`;
+  }
+
+  // ── 多动作 ──
+  const blocks = got
+    .map((t, i) => {
+      const rows = t.recent.map((p, j) => `[${offsets[i] + j}] ${trendPointLine(p)}`).join("\n");
+      return `━━ 对象 ${i + 1}：${t.exercise}（全库 ${t.totalSessions} 次记录）━━
+最近 ${t.recent.length} 次：
+${rows}
+此前 ${t.before.length} 次平均：工作容量 ${trendBeforeAvg(t)}
+${trendCaliberLines(t)}`;
+    })
+    .join("\n\n");
+
+  const missNote = empties.length ? `\n\n算不出来的：${empties.join("；")}——必须明说算不出，不要跳过不提。` : "";
+
+  /*
+   * 填空模板，不是「请把两个口径都报」这种嘱咐。
+   *
+   * 实测嘱咐没用：给两个动作各两个口径（4 个百分比，2 个方向相反）时，
+   * 7B 只报了「基本持平」那两个 —— 正好是**好看的那个**，
+   * 于是「不许只挑一个好看的结论」这条要求形同虚设。
+   * 换成逐行模板后，它要吐的字数结构被固定住，漏一个字段一眼就能看出来，
+   * 判据也才能逐行查「每个对象是不是真有两个百分比」。
+   */
+  const short = (caliber: string) => caliber.split("（")[0];
+  const cols = got[0].calibers.map((c) => short(c.caliber));
+  const template = got
+    .map((t) => `- ${t.exercise}｜${cols.map((c) => `${c}：<涨跌幅>% <结论>`).join("｜")}`)
+    .join("\n");
+
+  return `下面这些数字是系统**已经算好**的，准确，直接用，不要重新计算，也不要引入别的数字。
+
+${blocks}${missNote}
+
+回答必须**逐行照下面这个模板填**，行数、顺序都不许变，每一行的每个口径都要填满：
+
+${template}
+
+要求：
+1. 模板里每一行对应一个对象，共 ${got.length} 行，一行都不能少；漏一行答案就是错的。
+2. 每行必须出现**该对象的全部 ${cols.length} 个口径**（${cols.join(" / ")}），一个都不许省。两个口径方向相反时，都必须写出来。
+3. 只填模板里的数，不要加横向比较（谁涨得多需要跨动作归一化，系统没做，你也不许猜）。
+4. 不许把一个对象的数字安到另一个对象头上。
+5. 每行末尾用 [n] 标一条该对象自己的明细，编号就是上面方括号里的数字，不要错位。
+6. 模板之后**不要写自由总结**。如果确实想说一句，只能说「哪些对象的两个口径方向不一致」，
+   别的结论一律不许加——实测它会写「杠铃卧推在两个口径下均有所下降」，
+   而表格里剔除热身明明是「基本持平」：总结和表格打架比没有总结更糟。
+7. 中文，不超过 260 字。
 
 问题：${question}`;
 }
@@ -222,8 +284,10 @@ function trendCitations(t: TrendResult): Citation[] {
     n: i + 1,
     doc: p.docName,
     date: p.date,
-    label: `${p.docName} > ${p.session || "训练"} > 动作明细`,
-    headingPath: [p.session || "训练", "动作明细"],
+    // 末尾必须是**动作名**而不是「动作明细」：同一天练两个动作时（11-14 既深蹲又腿举），
+    // 两张卡片会一字不差，用户根本分不清哪张对应哪个动作——引用就白引了
+    label: `${p.docName} > ${p.session || "训练"} > ${t.exercise}`,
+    headingPath: [p.session || "训练", t.exercise],
     snippet: `${p.date} 最重 ${p.topWeight === null ? "自重" : `${p.topWeight}kg`}，正式组 ${p.workSets}，工作容量 ${p.workVolume}`,
     score: 0,
   }));
@@ -240,25 +304,47 @@ function trendCitations(t: TrendResult): Citation[] {
  */
 function planTrend(question: string): Plan | null {
   if (!TREND_INTENT.test(question)) return null;
-  const name = matchExercise(question);
-  if (!name) return null;
+  // 只有动作能算趋势：部位的趋势得先把不同动作归一化，那是另一件事，
+  // 硬算会得出「练腿的容量涨了」这种把深蹲和腿举加在一起的假结论
+  const ents = entitiesIn(question).filter((e) => e.kind === "exercise");
+  if (!ents.length) return null;
 
-  let trend: TrendResult;
-  try {
-    trend = getExerciseTrend(name);
-  } catch {
-    return null;
+  const got: TrendResult[] = [];
+  const empties: string[] = [];
+  const sibNotes: string[] = [];
+  for (const ent of ents) {
+    try {
+      const t = getExerciseTrend(ent.name);
+      if (t.ok) got.push(t);
+      else empties.push(`「${ent.name}」${t.reason ?? "趋势算不出来"}`);
+    } catch {
+      empties.push(`「${ent.name}」查询失败`);
+    }
+    if (ent.siblings.length) {
+      const tail = ent.name.slice(-2);
+      sibNotes.push(`「${ent.name}」是按「${tail}」这一档里练得最多的一个算的，语料里还有：${ent.siblings.join("、")}。要换一个说一声。`);
+    }
   }
-  if (!trend.ok) return null;
 
-  const cites = trendCitations(trend);
+  // 全部算不出就让检索兜底：宁可退化也不要在这条路上硬答
+  if (!got.length) return null;
+
+  const cites: Citation[] = [];
+  const offsets: number[] = [];
+  for (const t of got) {
+    const base = cites.length;
+    offsets.push(base + 1);
+    for (const x of trendCitations(t)) cites.push({ ...x, n: base + x.n });
+  }
+
   return {
     route: "trend",
     citations: cites,
     k: Math.max(1, cites.length),
-    prompt: buildTrendPrompt(trend, question),
+    prompt: buildTrendPrompt(got, offsets, question, empties),
     retrieveMs: 0,
-    numPredict: 200,
+    numPredict: got.length > 1 ? 300 : 200,
+    trailer: sibNotes.length ? sibNotes.join("\n") : undefined,
   };
 }
 
@@ -275,25 +361,34 @@ function planTrend(question: string): Plan | null {
  */
 const COUNT_INTENT = /几次|多少次|几回|几趟/;
 
-function buildCountPrompt(c: CountResult, question: string): string {
-  // 编号必须和 citations 的 n 对齐（countCitations 就是按 rows 顺序给 n），
-  // 否则模型引 [2] 会指到别的课上——引用错了比不引更糟
-  const rows = c.rows
+/** 一个统计对象的明细块。offset = 它在合并后引用列表里的起始编号减一 */
+function countRowsBlock(c: CountResult, offset: number): string {
+  return c.rows
     .map(
       (r, i) =>
-        `[${i + 1}] ${r.date} ${r.session || "训练"}｜重点部位 ${r.muscleFocus.join("/") || "无"}｜` +
+        `[${offset + i + 1}] ${r.date} ${r.session || "训练"}｜重点部位 ${r.muscleFocus.join("/") || "无"}｜` +
         `动作 ${r.exercises.join("、")}${r.degraded ? "｜降级课" : ""}`
     )
     .join("\n");
+}
 
-  return `下面的次数是系统**遍历全部训练记录数出来的**，准确，直接引用。
+/**
+ * 计数 prompt。
+ *
+ * 单对象时输出**和加多实体之前一字不差**——19 题验收已经过了那条路，
+ * 新功能不该顺手改动已验证的东西。多对象才走下面那个分支。
+ */
+function buildCountPrompt(got: CountResult[], offsets: number[], question: string, empties: string[]): string {
+  if (got.length === 1) {
+    const c = got[0];
+    return `下面的次数是系统**遍历全部训练记录数出来的**，准确，直接引用。
 
 统计对象：${c.target}
 区间：${c.periodLabel}（${c.from} ~ ${c.to}）
 重点次数：${c.focusCount}
 含兼带次数：${c.withSecondary}
 命中明细：
-${rows}
+${countRowsBlock(c, offsets[0] - 1)}
 
 口径说明：${c.caliber}
 
@@ -307,6 +402,40 @@ ${rows}
 4. 报次数时用 [n] 标出依据的是哪几条明细，编号对应上面方括号里的数字。
 5. 不要提到「计划里取消的课」之类不在明细里的东西来推断次数。
 6. 中文，不超过 120 字。
+
+问题：${question}`;
+  }
+
+  // ── 多对象 ──
+  const blocks = got
+    .map((c, i) => {
+      const rows = countRowsBlock(c, offsets[i] - 1);
+      return `━━ 对象 ${i + 1}：${c.target} ━━
+重点次数：${c.focusCount}　含兼带次数：${c.withSecondary}
+口径：${c.caliber}
+命中明细：
+${rows}`;
+    })
+    .join("\n\n");
+
+  const missNote = empties.length
+    ? `\n\n查不到的：${empties.join("；")}——必须在答案里明说没有，不要跳过不提。`
+    : "";
+
+  return `下面的次数是系统**遍历全部训练记录数出来的**，准确，直接引用。
+
+统计区间：${got[0].periodLabel}（${got[0].from} ~ ${got[0].to}）
+
+${blocks}${missNote}
+
+要求：
+1. 直接报上面的数字，**不要自己从明细里重新数**，也不要加减。
+2. **每个对象都要报**：共 ${got.length} 个对象，就答 ${got.length} 个，漏一个答案就是错的。
+3. 每个对象都报两个数：以它为**重点**的几次、把它**算上辅助**的几次。数字直接写（如「2 次」），不要用引用编号代替数字。
+4. 必须点明区间（${got[0].periodLabel}）。
+5. 报次数时用 [n] 标依据的明细，编号就是上面方括号里的数字，不要错位。
+6. 不要提到「计划里取消的课」之类不在明细里的东西来推断次数。
+7. 中文，不超过 220 字。
 
 问题：${question}`;
 }
@@ -331,88 +460,137 @@ const LOCATE_INTENT = /上次|上回|上一次|最近一次|什么时候|哪一�
 
 function planLatest(question: string): Plan | null {
   if (!LOCATE_INTENT.test(question)) return null;
-  const muscle = resolveMuscle(question);
-  const exercise = muscle ? null : matchExercise(question);
   // 认不出「问的是哪个部位/动作」就不接：像「什么时候该减载」这种问的是规则，
   // 硬按「最近一次减载」去查会给出一个驴唇不对马嘴的日期
-  if (!muscle && !exercise) return null;
+  const ents = entitiesIn(question);
+  if (!ents.length) return null;
 
-  let l: LatestResult;
-  try {
-    l = latestSession({ muscle, exercise });
-  } catch {
-    return null;
+  // 逐实体查。问「上次腿课和上次胸课分别是什么时候」时，旧实现只拿第一个命中的部位，
+  // 胸直接消失——不报错、也不承认漏了，界面上看起来是完整答案。
+  const got: Array<{ ent: Entity; r: LatestResult }> = [];
+  const misses: string[] = [];
+  const sibNotes: string[] = [];
+  for (const ent of ents) {
+    try {
+      const r = latestSession(ent.kind === "muscle" ? { muscle: ent.name } : { exercise: ent.name });
+      if (r.ok) got.push({ ent, r });
+      else misses.push(`${ent.name}：${r.reason}`);
+    } catch {
+      misses.push(`${ent.name}：查询失败`);
+    }
+
+    // 同名后缀的其他动作：用户说「硬拉」时语料里有五种，我们按频次选了「杠铃硬拉」，
+    // 但最近练的是「罗马尼亚硬拉」。两边都查得出日期、都像对的，
+    // 所以把日期一并给出，让用户自己认，别替他选。
+    if (ent.kind === "exercise" && ent.siblings.length) {
+      const parts: string[] = [];
+      for (const n of ent.siblings) {
+        try {
+          const s2 = latestSession({ exercise: n });
+          if (s2.ok) parts.push(`${n} ${s2.date}（距今 ${s2.daysAgo} 天）`);
+        } catch {
+          /* 单个候选查不到不影响主答案 */
+        }
+      }
+      if (parts.length)
+        sibNotes.push(
+          `「${ent.name}」我按语料里练得最多的那个算。你说的也可能是：${parts.join("、")}。要哪个说一声，我按那个查。`
+        );
+    }
   }
 
-  if (!l.ok)
+  if (!got.length)
     return {
       route: "latest",
       citations: [],
       k: 0,
       prompt: null,
-      fixedAnswer: `${l.reason}。如果统计口径不对（比如你想问的是别的部位），告诉我具体名字我再查。`,
+      fixedAnswer: `${misses.join("；")}。如果统计口径不对（比如你想问的是别的部位），告诉我具体名字我再查。`,
       retrieveMs: 0,
       numPredict: 0,
     };
 
   return {
     route: "latest",
-    citations: [
-      {
-        n: 1,
-        doc: l.docName,
-        date: l.date,
-        label: `${l.docName} > ${l.session || "训练"} > 动作明细`,
-        headingPath: [l.session || "训练", "动作明细"],
-        snippet: [l.muscleFocus.length ? `重点 ${l.muscleFocus.join("/")}` : "", l.exercises.join("、")]
-          .filter(Boolean)
-          .join("｜"),
-        score: 0,
-      },
-    ],
-    k: 1,
-    prompt: buildLatestPrompt(l, question),
+    citations: got.map(({ r }, i) => ({
+      n: i + 1,
+      doc: r.docName,
+      date: r.date,
+      label: `${r.docName} > ${r.session || "训练"} > 动作明细`,
+      headingPath: [r.session || "训练", "动作明细"],
+      snippet: [r.muscleFocus.length ? `重点 ${r.muscleFocus.join("/")}` : "", r.exercises.join("、")]
+        .filter(Boolean)
+        .join("｜"),
+      score: 0,
+    })),
+    k: got.length,
+    prompt: buildLatestPrompt(got, question, misses),
     retrieveMs: 0,
-    numPredict: 120,
+    // 多实体回答要逐个报，字数上限得放开，否则会写到第二个就断
+    numPredict: got.length > 1 ? 200 : 120,
+    trailer: sibNotes.length ? sibNotes.join("\n") : undefined,
   };
 }
 
-function buildLatestPrompt(l: LatestResult, question: string): string {
-  return `下面这条是系统**遍历全部训练记录取出的最晚一条**，准确，直接引用，不要自己去比明细里的日期。
+function buildLatestPrompt(
+  got: Array<{ ent: Entity; r: LatestResult }>,
+  question: string,
+  misses: string[]
+): string {
+  const blocks = got
+    .map(({ ent, r }, i) => {
+      const head = `[${i + 1}] ${ent.name}`;
+      return `${head}
+    最近一次：${r.date}${r.session ? `（${r.session}）` : ""}，距今天 ${r.daysAgo} 天
+    那节课重点部位：${r.muscleFocus.join("/") || "无"}｜动作：${r.exercises.join("、") || "无"}
+    更早一次（**不是答案**，只用来证明这不是唯一一次）：${r.previous ? r.previous.date : "无，语料里只有这一次"}`;
+    })
+    .join("\n");
 
-统计对象：${l.target}
-最近一次：${l.date}${l.session ? `（${l.session}）` : ""}
-距今：${l.daysAgo} 天
-那节课的重点部位：${l.muscleFocus.join("/") || "无"}
-那节课的动作：${l.exercises.join("、") || "无"}
-更早一次（**不是答案**，只用来证明这不是唯一一次）：${l.previous ? l.previous.date : "无，语料里只有这一次"}
+  const missNote = misses.length
+    ? `\n\n查不到的：${misses.join("；")}——这几项必须在答案里明说查不到，不要跳过不提。`
+    : "";
 
-系统结论：${l.summary}
+  const askAll =
+    got.length > 1
+      ? `1. **每一条都要报**：用户问了 ${got.length} 个对象，就答 ${got.length} 个，一个都不能漏；漏一个答案就是错的。`
+      : `1. 答案就是「最近一次」那个日期，**不要**报成「更早一次」的日期。`;
+
+  return `下面 ${got.length} 条都是系统**遍历全部训练记录取出的最晚一条**，准确，直接引用，不要自己去比明细里的日期。
+
+${blocks}${missNote}
 
 要求：
-1. 答案就是「最近一次」那个日期（${l.date}），**不要**报成下面「更早一次」的日期。
-2. 用 [1] 标出处。如果用户问「多久没练」，把「距今 N 天」一起报出来。
-3. 计划里写了但没做的课不算——不要拿明细里没有的东西推断。
-4. 中文，不超过 60 字。
+${askAll}
+2. 每条用**它自己的编号**标出处（第 1 条用 [1]，第 2 条用 [2]），编号不要错位。
+3. 如果用户问「多久没练」，把「距今 N 天」一起报出来。
+4. 计划里写了但没做的课不算——不要拿明细里没有的东西推断。
+5. 中文，不超过 ${got.length > 1 ? "160" : "60"} 字。
 
 问题：${question}`;
 }
 
 function planCount(question: string): Plan | null {
   if (!COUNT_INTENT.test(question)) return null;
-  const muscle = resolveMuscle(question);
-  const exercise = muscle ? null : matchExercise(question);
-  if (!muscle && !exercise) return null;
+  const ents = entitiesIn(question);
+  if (!ents.length) return null;
 
   const period = resolvePeriod(question);
-  let c: CountResult;
-  try {
-    c = countTraining({ muscle, exercise, period });
-  } catch {
-    return null;
+  const got: CountResult[] = [];
+  const empties: string[] = [];
+  for (const ent of ents) {
+    try {
+      // 注意别把 muscle 和 exercise 一起传：countTraining 里 muscle 优先，
+      // 传了 exercise 也不会被用，反而让人以为两个条件生效了
+      const c = countTraining(ent.kind === "muscle" ? { muscle: ent.name, period } : { exercise: ent.name, period });
+      if (c.ok) got.push(c);
+      else empties.push(`${c.periodLabel} 没有以「${ent.name}」为参与部位的训练记录`);
+    } catch {
+      empties.push(`${ent.name} 查询失败`);
+    }
   }
 
-  if (!c.ok) {
+  if (!got.length) {
     // 空结果直接给，不过模型：这里是事实陈述，没有可润色的空间
     return {
       route: "count",
@@ -420,21 +598,29 @@ function planCount(question: string): Plan | null {
       k: 0,
       prompt: null,
       fixedAnswer:
-        `${c.periodLabel}（${c.from} ~ ${c.to}）没有以「${c.target}」为参与部位的训练记录。` +
-        `如果这个统计口径不对（比如你想问的是别的部位），告诉我具体名字我再数。`,
+        (empties.join("；") || "没有数到记录") +
+        `。如果这个统计口径不对（比如你想问的是别的部位），告诉我具体名字我再数。`,
       retrieveMs: 0,
       numPredict: 0,
     };
   }
 
-  const cites = countCitations(c);
+  // 合并引用：编号必须连续且和明细一一对应，否则模型引 [2] 会指到别的对象上
+  const cites: Citation[] = [];
+  const offsets: number[] = [];
+  for (const c of got) {
+    const base = cites.length;
+    offsets.push(base + 1);
+    for (const x of countCitations(c)) cites.push({ ...x, n: base + x.n });
+  }
+
   return {
     route: "count",
     citations: cites,
     k: Math.max(1, cites.length),
-    prompt: buildCountPrompt(c, question),
+    prompt: buildCountPrompt(got, offsets, question, empties),
     retrieveMs: 0,
-    numPredict: 180,
+    numPredict: got.length > 1 ? 260 : 180,
   };
 }
 
@@ -444,8 +630,11 @@ function countCitations(c: CountResult): Citation[] {
     n: i + 1,
     doc: r.docName,
     date: r.date,
-    label: `${r.docName} > ${r.session || "训练"} > 动作明细`,
-    headingPath: [r.session || "训练", "动作明细"],
+    // 同样标出统计对象：一节「推」日既算胸也算手臂，两处明细会引用同一篇文档。
+    // 不去重（那是两套证据，合并编号会把「每个对象几条明细」搅乱），
+    // 但卡片必须让人看出这一条是「胸」那一条是「手臂」。
+    label: `${r.docName} > ${r.session || "训练"} > ${c.target}`,
+    headingPath: [r.session || "训练", c.target],
     snippet: [r.muscleFocus.length ? `重点 ${r.muscleFocus.join("/")}` : "", r.exercises.join("、")]
       .filter(Boolean)
       .join("｜"),
@@ -511,7 +700,7 @@ function planRetrieve(question: string, k: number): { ok: true; plan: Plan } | {
  *
  * `noTools` 只在一处用：数值入口生成失败时回落到检索，避免来回递归。
  */
-function pick(question: string, k: number, noTools?: boolean): Plan | { error: string } {
+export function pick(question: string, k: number, noTools?: boolean): Plan | { error: string } {
   if (!noTools) {
     const c = planCount(question);
     if (c) return c;
@@ -570,6 +759,8 @@ export async function ask(
   let answer: string;
   try {
     answer = await generateOnce(plan.prompt, plan.numPredict);
+    // trailer 是代码写的事实补充（歧义提示），模型没机会改它
+    if (plan.trailer) answer = `${answer.trimEnd()}\n\n${plan.trailer}`;
   } catch (e) {
     // 数值入口生成失败就退化到检索：宁可答得保守，也不要在这条路上给半个数
     if (plan.route !== "retrieve") return ask(question, { k, noTools: true });
@@ -699,7 +890,8 @@ export async function* askStream(
   };
 
   if (plan.prompt === null) {
-    const answer = plan.fixedAnswer ?? "";
+    const fixed = plan.fixedAnswer ?? "";
+    const answer = plan.trailer ? `${fixed}\n\n${plan.trailer}` : fixed;
     yield { type: "token", text: answer };
     yield {
       type: "done",
@@ -732,11 +924,16 @@ export async function* askStream(
     return;
   }
 
-  const answer = acc.trim();
-  if (!answer) {
+  const body = acc.trim();
+  if (!body) {
     yield { type: "error", reason: "模型返回空" };
     return;
   }
+  // trailer 必须以 token 形式发出，否则页面上看不到它——只塞进 done.answer 的话，
+  // 用户看到的那段文字和校验的那段就不是同一份了
+  const trailer = plan.trailer ? `\n\n${plan.trailer}` : "";
+  if (trailer) yield { type: "token", text: trailer };
+  const answer = body + trailer;
   yield {
     type: "done",
     answer,
