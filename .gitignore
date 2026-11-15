@@ -43,3 +43,14 @@ next-env.d.ts
 
 # 私人学习笔记，不发布
 .notes/
+
+# 私人材料，永不进公开仓（2026-11-15）
+# 这个仓库是作品库、公开可见；真实数据与私人材料一律留在本机/知识库
+.notes/
+private/
+*.local.json
+*.private.md
+*.private.json
+# 真实训练/健康数据导出（体积大且含个人信息）
+*.fit
+*.gpx
