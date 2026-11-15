@@ -50,15 +50,34 @@
 
   <header>
     <div class="eyebrow">fitness-agent · 实测报告</div>
-    <h1>让模型稳定吐出<em>能用的 JSON</em></h1>
+    <h1>让模型稳定吐出<em>能用的 JSON</em>，<br>也让它<em>承认自己没用</em></h1>
     <p class="lede">
-      用本机跑的 7B 模型把中文训练记录抽成结构化数据，每次改动都按<b>固定样本、固定判据</b>实测。
-      这里放的是过程记录：<strong>失败长什么样、为什么失败、改了什么、还剩什么没解决</strong>。
+      用本机跑的模型把中文训练记录抽成结构化数据、再做成可检索的库。每次改动都按<b>固定样本、固定判据</b>实测，
+      包括<b>跑完发现方案不如基线</b>的那次。这里放的是过程记录：
+      <strong>失败长什么样、为什么失败、改了什么、还剩什么没解决</strong>。
     </p>
   </header>
 
   <main>
-    <div class="list-label">全部报告</div>
+    <div class="list-label">全部报告 · 按新旧倒序</div>
+
+    <a class="card" href="./retrieval.html">
+      <div class="top">
+        <span class="wk">实测 02 · 最新</span>
+        <h2>检索：先让「向量」证明自己</h2>
+      </div>
+      <p>
+        804 篇记录切成 3029 块，用 bge-m3 建向量库，然后测它到底比关键词检索强不强。
+        结果是<strong>不更强</strong>——连预期它必赢的语义组也输了。报告里写了为什么、怎么查出的
+        <code>出题偏差</code>、以及哪 4 道题的答案根本标错了。
+      </p>
+      <div class="meta">
+        <span>BM25 Sec@5 <b>100%</b></span>
+        <span>向量 Sec@5 <b>93%</b></span>
+        <span>15 题 × 6 方案</span>
+        <span>数值题另走一路</span>
+      </div>
+    </a>
 
     <a class="card" href="./w2-structured-output.html">
       <div class="top">
@@ -80,7 +99,8 @@
     <div class="list-label" style="margin-top:38px">说明</div>
     <p style="font-size:14.5px;color:var(--ink-2);max-width:660px">
       每个报告都是一次可复现的验收：判据先写死，跑完再看结果。报告里的耗时、合规数都是实测输出，
-      不是估算。原始脚本在仓库 <code>scripts/</code> 下，<code>--n</code> 参数可重跑。
+      不是估算，也不是挑出来好看的那部分。原始脚本在仓库 <code>scripts/</code> 下，都能重跑；
+      检索那份还带一个 <code>--verify</code> 开关，用来检查标准答案本身有没有标错。
     </p>
   </main>
 

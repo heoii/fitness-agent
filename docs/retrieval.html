@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>W3–W5 · 检索能不能用，先量清楚</title>
+<style>
+  :root{
+    --bg:#faf8f5; --surface:#ffffff; --ink:#181614; --ink-2:#4d4842; --ink-3:#8a8378;
+    --line:#e6e1d8; --line-strong:#d5cec1; --accent:#b45309; --accent-soft:#fdf3e7;
+    --pass:#15803d; --pass-soft:#eef7ef; --fail:#b3261e; --fail-soft:#fdeeec;
+    --warn:#a16207; --warn-soft:#fdf6e3;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:16px;line-height:1.75;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:880px;margin:0 auto;padding:0 32px}
+
+  .hero{padding:76px 0 44px;border-bottom:1px solid var(--line)}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-bottom:22px;display:flex;align-items:center;gap:10px}
+  .eyebrow::after{content:"";flex:1;height:1px;background:var(--line-strong)}
+  h1{font-size:40px;line-height:1.25;font-weight:650;letter-spacing:-.02em;margin-bottom:18px}
+  h1 em{font-style:normal;color:var(--accent)}
+  .lede{font-size:18px;color:var(--ink-2);max-width:660px}
+  .lede strong{color:var(--ink);font-weight:600}
+
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line);margin-top:38px;border-radius:10px;overflow:hidden}
+  .stat{background:var(--surface);padding:20px 18px}
+  .stat .k{font-family:var(--mono);font-size:11px;letter-spacing:.08em;color:var(--ink-3);text-transform:uppercase;margin-bottom:8px}
+  .stat .v{font-family:var(--mono);font-size:26px;font-weight:600;line-height:1.1;letter-spacing:-.02em}
+  .stat .v small{font-size:13px;color:var(--ink-3);font-weight:400;letter-spacing:0}
+  .stat .v.ok{color:var(--pass)}
+  .stat .v.warn{color:var(--warn)}
+
+  .toc{padding:28px 0;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:8px 22px}
+  .toc a{font-size:13px;color:var(--ink-3);text-decoration:none;font-family:var(--mono);border-bottom:1px solid transparent;transition:.15s}
+  .toc a:hover{color:var(--accent);border-bottom-color:var(--accent)}
+  .toc a b{color:var(--ink-2);font-weight:500;margin-right:6px}
+
+  section{padding:56px 0;border-bottom:1px solid var(--line)}
+  section:last-of-type{border-bottom:0}
+  .sec-head{display:flex;align-items:baseline;gap:14px;margin-bottom:10px}
+  .sec-num{font-family:var(--mono);font-size:12px;color:var(--accent);letter-spacing:.1em;padding-top:4px}
+  h2{font-size:26px;font-weight:620;letter-spacing:-.015em;line-height:1.35}
+  .sec-sub{color:var(--ink-3);font-size:14.5px;margin:-2px 0 30px 32px}
+  h3{font-size:17px;font-weight:620;margin:34px 0 10px;letter-spacing:-.005em}
+  h3:first-of-type{margin-top:0}
+  p{color:var(--ink-2);margin-bottom:14px}
+  p strong,li strong{color:var(--ink);font-weight:600}
+  ul,ol{margin:0 0 16px 20px;color:var(--ink-2)}
+  li{margin-bottom:8px}
+  code{font-family:var(--mono);font-size:.88em;background:#f1ede5;padding:2px 6px;border-radius:4px;color:#7c3a06}
+
+  .quote{border-left:3px solid var(--accent);background:var(--accent-soft);padding:18px 22px;margin:22px 0;border-radius:0 8px 8px 0}
+  .quote p{margin:0;color:#6b3a04;font-size:15.5px}
+  .quote p strong{color:#4a2703}
+  .quote.grey{border-left-color:var(--line-strong);background:#f7f4ee}
+  .quote.grey p{color:var(--ink-2)}
+  .quote.grey p strong{color:var(--ink)}
+
+  table{width:100%;border-collapse:collapse;margin:20px 0 8px;font-size:14.5px}
+  th{text-align:left;font-family:var(--mono);font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);font-weight:500;padding:0 12px 9px;border-bottom:1.5px solid var(--line-strong)}
+  td{padding:11px 12px;border-bottom:1px solid var(--line);color:var(--ink-2);vertical-align:top}
+  tbody tr:hover{background:#fdfbf8}
+  td.mono,th.mono{font-family:var(--mono);font-size:13px}
+  td.file{font-family:var(--mono);font-size:12.5px;color:var(--ink-2);line-height:1.5}
+  .tbl-note{font-size:13px;color:var(--ink-3);margin-top:10px}
+  tr.hero-row td{background:#fdfbf8;font-weight:600;color:var(--ink)}
+  tr.dim td{color:var(--ink-3)}
+
+  .chip{display:inline-block;font-family:var(--mono);font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:4px;letter-spacing:.02em;white-space:nowrap}
+  .chip.ok{background:var(--pass-soft);color:var(--pass)}
+  .chip.no{background:var(--fail-soft);color:var(--fail)}
+  .chip.mid{background:var(--warn-soft);color:var(--warn)}
+
+  .flow{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:28px 24px;margin:26px 0}
+  .flow-row{display:flex;align-items:stretch;gap:0;flex-wrap:nowrap}
+  .node{flex:1;background:#faf8f5;border:1px solid var(--line-strong);border-radius:8px;padding:13px 10px;text-align:center;min-width:0}
+  .node .n-k{font-family:var(--mono);font-size:10px;letter-spacing:.08em;color:var(--ink-3);text-transform:uppercase;margin-bottom:5px}
+  .node .n-v{font-size:13.5px;font-weight:600;color:var(--ink);line-height:1.4;word-break:break-word}
+  .node .n-d{font-size:11.5px;color:var(--ink-3);margin-top:4px;line-height:1.4}
+  .node.gate{background:var(--accent-soft);border-color:#e8c89a}
+  .node.gate .n-v{color:#7c3a06}
+  .arrow{display:flex;align-items:center;padding:0 6px;color:var(--line-strong);font-size:15px;flex:0 0 auto}
+  .flow-foot{margin-top:20px;padding-top:18px;border-top:1px dashed var(--line-strong);display:grid;grid-template-columns:1fr 1fr;gap:20px;font-size:13px;color:var(--ink-2)}
+  .flow-foot b{display:block;font-family:var(--mono);font-size:11px;letter-spacing:.06em;color:var(--ink-3);text-transform:uppercase;margin-bottom:4px}
+
+  .case{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:24px 26px;margin-bottom:16px}
+  .case-top{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+  .case-id{font-family:var(--mono);font-size:11px;color:#fff;background:var(--ink);padding:2px 7px;border-radius:4px;letter-spacing:.04em}
+  .case-name{font-family:var(--mono);font-size:13.5px;font-weight:600;color:var(--ink)}
+  .kv{display:grid;grid-template-columns:76px 1fr;gap:6px 14px;font-size:14.5px}
+  .kv dt{font-family:var(--mono);font-size:11.5px;color:var(--ink-3);letter-spacing:.05em;padding-top:3px}
+  .kv dd{color:var(--ink-2);margin:0}
+  .kv dd em{font-style:normal;background:#fdf3e7;color:#7c3a06;padding:1px 5px;border-radius:3px;font-family:var(--mono);font-size:12.5px}
+
+  pre{background:#26221d;color:#e8e2d8;border-radius:10px;padding:18px 20px;overflow-x:auto;font-family:var(--mono);font-size:12.8px;line-height:1.7;margin:16px 0}
+  pre .c{color:#8a7f6d}
+  pre .del{color:#f3a49b}
+  pre .add{color:#9fd8a8}
+  pre .key{color:#f0c07a}
+
+  details{border:1px solid var(--line);border-radius:9px;background:var(--surface);margin-bottom:10px;overflow:hidden}
+  details[open]{border-color:var(--line-strong)}
+  summary{cursor:pointer;padding:15px 20px;font-weight:600;font-size:15px;color:var(--ink);list-style:none;display:flex;gap:12px;align-items:flex-start}
+  summary::-webkit-details-marker{display:none}
+  summary::before{content:"?";font-family:var(--mono);font-size:11px;font-weight:700;color:var(--accent);background:var(--accent-soft);width:18px;height:18px;border-radius:4px;display:flex;align-items:center;justify-content:center;flex:0 0 auto;margin-top:3px}
+  details[open] summary{border-bottom:1px solid var(--line);background:#fdfbf8}
+  .ans{padding:16px 20px 18px 50px;font-size:14.5px;color:var(--ink-2)}
+  .ans p:last-child{margin-bottom:0}
+  .ans .say{display:block;background:#f7f4ee;border-left:2px solid var(--line-strong);padding:10px 14px;border-radius:0 6px 6px 0;margin-top:10px;color:var(--ink)}
+  .ans .say::before{content:"这样答";display:block;font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;color:var(--ink-3);text-transform:uppercase;margin-bottom:5px}
+
+  .kp{border-top:1px solid var(--line);padding:22px 0}
+  .kp:first-of-type{border-top:0;padding-top:0}
+  .kp-h{display:flex;align-items:baseline;gap:10px;margin-bottom:8px}
+  .kp-h .i{font-family:var(--mono);font-size:12px;color:var(--accent);font-weight:600}
+  .kp-h h4{font-size:16px;font-weight:620;color:var(--ink)}
+  .kp p{font-size:14.5px;margin-bottom:8px}
+  .selfcheck{font-size:13.5px;color:#6b3a04;background:var(--accent-soft);padding:9px 14px;border-radius:6px;margin-top:10px}
+  .selfcheck b{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#8a5a12}
+
+  .next{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:26px 28px}
+  .next ol{margin-left:0;list-style:none;counter-reset:s}
+  .next li{counter-increment:s;position:relative;padding-left:34px;margin-bottom:14px;font-size:14.5px}
+  .next li::before{content:counter(s);position:absolute;left:0;top:1px;width:22px;height:22px;border-radius:50%;background:var(--ink);color:#fff;font-family:var(--mono);font-size:11.5px;font-weight:600;display:flex;align-items:center;justify-content:center}
+
+  footer{padding:44px 0 64px;color:var(--ink-3);font-size:13px;font-family:var(--mono);line-height:2}
+  footer .rule{height:1px;background:var(--line);margin-bottom:24px}
+
+  @media (max-width:720px){
+    .wrap{padding:0 20px}
+    h1{font-size:30px}
+    .stats{grid-template-columns:repeat(2,1fr)}
+    .flow-row{flex-wrap:wrap}
+    .node{flex:1 1 40%}
+    .arrow{display:none}
+    .node{margin:4px}
+    .flow-foot{grid-template-columns:1fr}
+    .kv{grid-template-columns:1fr;gap:2px}
+    .kv dt{padding-top:8px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <div class="eyebrow">健身 Agent · W3–W5 检索评测</div>
+  <h1>先让「向量检索」<em>证明自己</em></h1>
+  <p class="lede">
+    我给自己的假设是：语义检索应该赢过关键词检索。跑完 15 道题、6 种方案之后，
+    <strong>它输了</strong>——连我预期它必赢的那一组也输了。
+    这份报告记的是这个结果，以及它为什么会这样，还有哪些结论我不能下。
+  </p>
+
+  <div class="stats">
+    <div class="stat"><div class="k">评测题</div><div class="v">15<small> 题</small></div></div>
+    <div class="stat"><div class="k">BM25 · Sec@5</div><div class="v ok">100<small>%</small></div></div>
+    <div class="stat"><div class="k">向量 · Sec@5</div><div class="v warn">93<small>%</small></div></div>
+    <div class="stat"><div class="k">索引规模</div><div class="v">3029<small> chunk</small></div></div>
+  </div>
+</header>
+
+<nav class="toc">
+  <a href="#why"><b>01</b>要回答什么</a>
+  <a href="#data"><b>02</b>数据与判据</a>
+  <a href="#design"><b>03</b>实验设计</a>
+  <a href="#result"><b>04</b>结果</a>
+  <a href="#why-bm25"><b>05</b>为什么是 BM25</a>
+  <a href="#bias"><b>06</b>出题偏差自查</a>
+  <a href="#verify"><b>07</b>标注检查</a>
+  <a href="#numeric"><b>08</b>数值题</a>
+  <a href="#limit"><b>09</b>不能下的结论</a>
+  <a href="#next"><b>10</b>下一步</a>
+</nav>
+
+<!-- 01 -->
+<section id="why">
+  <div class="sec-head"><span class="sec-num">01</span><h2>这一轮要回答的问题</h2></div>
+  <p class="sec-sub">不是「能不能跑通」，那个 W4 已经证明了。</p>
+
+  <p>W3 把 804 篇记录切成 3029 个块，W4 证明了嵌入能算、能存、能读回、余弦排序正常。
+  这些是<strong>连通性</strong>，不是<strong>有效性</strong>——链路通了，不代表搜索结果有用。</p>
+
+  <p>真正待回答的是一个决策问题：<strong>这套东西值不值得留在项目里</strong>。它要花 63 MB 存储、
+  76 秒建库、每次查询一次模型前向；如果换一个零依赖的 BM25 就能达到同样效果，
+  那它就是个昂贵的摆设。</p>
+
+  <div class="quote">
+    <p>所以这一轮的判据不是「召回率够不够高」，而是<strong>「它有没有赢过最便宜的那条基线」</strong>。
+    赢不了就不该留，赢了才谈调优。</p>
+  </div>
+</section>
+
+<!-- 02 -->
+<section id="data">
+  <div class="sec-head"><span class="sec-num">02</span><h2>数据与判据</h2></div>
+  <p class="sec-sub">判据先冻结，跑完才看数——顺序反了就是给自己画分数线。</p>
+
+  <h3>数据集</h3>
+  <table>
+    <thead><tr><th style="width:130px">项</th><th>值</th><th style="width:210px">备注</th></tr></thead>
+    <tbody>
+      <tr><td>文档</td><td class="mono">804 篇 Markdown</td><td>单一目录，无子目录</td></tr>
+      <tr><td>时间跨度</td><td class="mono">2025-08-05 ~ 2026-11-14</td><td>15 个月</td></tr>
+      <tr><td>类型</td><td class="mono">training 573 / health-daily 217 / 其他 14</td><td>frontmatter 全可解析</td></tr>
+      <tr><td>力量训练</td><td class="mono">213 次</td><td>有动作明细的才算</td></tr>
+      <tr><td>睡眠记录</td><td class="mono">156 天</td><td>有实测值的才算</td></tr>
+      <tr><td>切片</td><td class="mono">3029 chunk</td><td>中位 91 字，P90 245，max 1199</td></tr>
+      <tr><td>向量库</td><td class="mono">1024 维 / 63.6 MB / 76.3s</td><td>bge-m3，25.2 ms 每条</td></tr>
+    </tbody>
+  </table>
+
+  <div class="quote grey">
+    <p><strong>一个必须先说清的数据事实：</strong>573 篇训练记录里绝大多数是同一模板换数字
+    ——同样的「训练摘要」+「动作明细」，只有动作名、组次、重量不同。真正的知识密度集中在
+    十几篇带手工复盘的健康记录里。这决定了后面所有结论的适用范围，也决定了关键词检索为什么这么强。</p>
+  </div>
+
+  <h3>判据</h3>
+  <p>三个指标，各管一件事，不合并成一个「准确率」——合并了就没法指导下一步改什么。</p>
+  <table>
+    <thead><tr><th style="width:110px">指标</th><th>定义</th><th style="width:200px">为什么需要它</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">Doc@k</td><td>正确<strong>文档</strong>出现在前 k 条</td><td>公平比较检索器：切法不同，文档级判定都成立</td></tr>
+      <tr><td class="mono">Sec@k</td><td>正确<strong>章节</strong>出现在前 k 条（同文档 + 同小节）</td><td><strong>主指标</strong>：一篇记录有 8 个动作块，翻对页指错动作等于答错</td></tr>
+      <tr><td class="mono">MRR</td><td>第一个命中位置的倒数排名均值</td><td>区分「第一就中」和「第五才中」</td></tr>
+    </tbody>
+  </table>
+  <p class="tbl-note">k 取 5：下游是「把原文 3–5 段摘给用户看」，第 6 条之后的内容用户读不到。</p>
+</section>
+
+<!-- 03 -->
+<section id="design">
+  <div class="sec-head"><span class="sec-num">03</span><h2>实验设计：2×3，不是一条曲线</h2></div>
+  <p class="sec-sub">只报一个方案的数字，分不清进步是从哪来的。</p>
+
+  <p>W3 已经证明<strong>切片方式本身</strong>就能让质量差出一大截。所以如果只测「向量 + 标题切」，
+  它赢了会把功劳全算给向量，输了会把锅全甩给切法。必须把两个变量拆开：</p>
+
+  <div class="flow">
+    <div class="flow-row">
+      <div class="node"><div class="n-k">切法 A</div><div class="n-v">标题层级切</div><div class="n-d">H2 + H3，带 headingPath<br>3029 chunk</div></div>
+      <div class="arrow">×</div>
+      <div class="node"><div class="n-k">切法 B</div><div class="n-v">只按 H2 切</div><div class="n-d">块更大，仍带标题<br>H3 降级为粗体行</div></div>
+      <div class="arrow">×</div>
+      <div class="node"><div class="n-k">切法 C</div><div class="n-v">固定 512 字</div><div class="n-d">按行累加，无标题上下文<br>1416 chunk</div></div>
+    </div>
+    <div class="flow-row" style="margin-top:14px">
+      <div class="node gate"><div class="n-k">检索器 1</div><div class="n-v">bge-m3 向量</div><div class="n-d">1024 维，余弦</div></div>
+      <div class="arrow">×</div>
+      <div class="node gate"><div class="n-k">检索器 2</div><div class="n-v">BM25</div><div class="n-d">中文 bigram，k1=1.2 b=0.75</div></div>
+      <div class="arrow">→</div>
+      <div class="node"><div class="n-k">输出</div><div class="n-v">6 种组合</div><div class="n-d">同一批题、同一批判据</div></div>
+    </div>
+    <div class="flow-foot">
+      <div><b>行对比</b>检索器的贡献（同一份切分，只换打分方式）</div>
+      <div><b>列对比</b>切法的贡献（同一个检索器，只换块的大小与上下文）</div>
+    </div>
+  </div>
+
+  <h3>为什么给 BM25 用字符 bigram</h3>
+  <p>中文 IR 里最强的朴素做法之一。我刻意<strong>没有</strong>弱化它：不引 jieba 是因为词典分词
+  在「史密斯窄推」这类器械动作名上反而容易切错，而 bigram 不需要词典。</p>
+  <div class="quote">
+    <p>基线要按<strong>最强的朴素方法</strong>搭，不是按<strong>最容易被自己打败的方法</strong>搭。
+    对基线放水，等于给自己发奖状。</p>
+  </div>
+</section>
+
+<!-- 04 -->
+<section id="result">
+  <div class="sec-head"><span class="sec-num">04</span><h2>结果</h2></div>
+  <p class="sec-sub">15 题（语义型 8 / 实体型 7），同一批判据，一次跑完。</p>
+
+  <table>
+    <thead><tr><th style="width:170px">方案</th><th class="mono">Doc@1</th><th class="mono">Doc@5</th><th class="mono">Sec@1</th><th class="mono">Sec@5</th><th class="mono">MRR</th></tr></thead>
+    <tbody>
+      <tr class="hero-row"><td>BM25 · 标题切</td><td class="mono">87%</td><td class="mono">100%</td><td class="mono">80%</td><td class="mono">100%</td><td class="mono">0.880</td></tr>
+      <tr><td>向量 · 标题切</td><td class="mono">73%</td><td class="mono">93%</td><td class="mono">73%</td><td class="mono">93%</td><td class="mono">0.843</td></tr>
+      <tr><td>BM25 · H2 级</td><td class="mono">87%</td><td class="mono">100%</td><td class="mono">80%</td><td class="mono">93%</td><td class="mono">0.862</td></tr>
+      <tr><td>向量 · H2 级</td><td class="mono">60%</td><td class="mono">87%</td><td class="mono">60%</td><td class="mono">87%</td><td class="mono">0.711</td></tr>
+      <tr><td>BM25 · 固定切</td><td class="mono">87%</td><td class="mono">93%</td><td class="mono">53%</td><td class="mono">73%</td><td class="mono">0.613</td></tr>
+      <tr><td>向量 · 固定切</td><td class="mono">47%</td><td class="mono">80%</td><td class="mono">27%</td><td class="mono">73%</td><td class="mono">0.480</td></tr>
+    </tbody>
+  </table>
+  <p class="tbl-note">主指标 Sec@5。表格按 MRR 排序，不是按我的原始假设排序。</p>
+
+  <p>三件事直接从这个表里读出来：</p>
+  <ol>
+    <li><strong>向量在三组切法下全部输给 BM25</strong>，包括语义组。</li>
+    <li><strong>BM25 的 Doc@1 恒定 87%</strong>，完全不随切法变化；向量在 47%–73% 之间大幅波动。
+    <strong>BM25 对切法鲁棒，向量对切法敏感</strong>——这一条比「谁赢」更有信息量。</li>
+    <li>两种检索器都受益于标题上下文（固定切是共同的低谷），但向量对它的依赖是<strong>生死线</strong>级别的。</li>
+  </ol>
+
+  <h3>分组看，更清楚</h3>
+  <table>
+    <thead><tr><th>方案</th><th class="mono">S 语义组（8 题）</th><th class="mono">K 实体组（7 题）</th></tr></thead>
+    <tbody>
+      <tr><td>BM25 · 标题切</td><td class="mono">8/8 <span class="chip ok">满</span></td><td class="mono">7/7 <span class="chip ok">满</span></td></tr>
+      <tr><td>向量 · 标题切</td><td class="mono">7/8</td><td class="mono">7/7</td></tr>
+      <tr><td>BM25 · 固定切</td><td class="mono">7/8</td><td class="mono">4/7</td></tr>
+      <tr><td>向量 · 固定切</td><td class="mono">8/8</td><td class="mono">3/7</td></tr>
+      <tr class="dim"><td>向量 · H2 级</td><td class="mono">8/8</td><td class="mono">5/7</td></tr>
+      <tr class="dim"><td>BM25 · H2 级</td><td class="mono">7/8</td><td class="mono">7/7</td></tr>
+    </tbody>
+  </table>
+  <p class="tbl-note">
+    注意固定切那一行的分裂：<strong>向量在语义组 8/8，在实体组 3/7</strong>。
+    这不是矛盾，是机制——语义需要长上下文，实体需要精确的小块。同一份切法不可能同时满足两头。
+  </p>
+</section>
+
+<!-- 05 -->
+<section id="why-bm25">
+  <div class="sec-head"><span class="sec-num">05</span><h2>为什么是 BM25 赢</h2></div>
+  <p class="sec-sub">不是实现有 bug，是这份语料的性质决定的。</p>
+
+  <p>先说结论：<strong>我检查过，向量这条链路没有坏。</strong>自检索余弦 1.000000、
+  存盘读回逐值一致、维度 1024 恒定、排序单调。它输的原因是语料，不是代码。</p>
+
+  <h3>三条机制</h3>
+  <p><strong>① 术语由同一个人写又同一个人读，不存在同义改写。</strong>
+  用户问「史密斯深蹲」，语料里写的就是「史密斯深蹲」，一字不差。BM25 是精确匹配，
+  这种场景正是它的主场；向量把这种优势花在「理解语义」上，反而多了一层损耗。</p>
+
+  <p><strong>② 语料高度同质，语义向量区分不出来。</strong>573 篇训练记录共享同一套模板，
+  一个动作块长这样：</p>
+  <pre><span class="key">### 史密斯深蹲（kg）— 容量 2060</span>
+- 组1：40kg × 8，休息 150s　（热身）
+- 组2：60kg × 8，休息 150s
+- 组3：60kg × 8，休息 150s</pre>
+  <p>这种文本的语义含量极低——它是<strong>一组数字</strong>，不是一段论述。嵌入模型看到 20 个这样的块，
+  得到的向量几乎一样。而「史密斯深蹲」这四个字是硬特征，BM25 直接命中。</p>
+
+  <p><strong>③ 块太碎时，向量失去语义锚点。</strong>固定切出来的块没有标题路径，
+  向量不知道自己在讲哪个动作，Doc@1 从 73% 掉到 47%。</p>
+
+  <h3>那向量到底什么时候有用</h3>
+  <p>只有一种情况，在这批题里出现了一次：<strong>术语不一致</strong>。</p>
+
+  <div class="case">
+    <div class="case-top"><span class="case-id">S3</span><span class="case-name">「心率变异性该看早上那次还是夜里平均值」</span></div>
+    <dl class="kv">
+      <dt>语料用词</dt><dd><em>HRV</em> —— 223 篇文档使用这个缩写</dd>
+      <dt>题面用词</dt><dd><em>心率变异性</em> —— 语料里 <strong>0 篇</strong>出现这个中文全称</dd>
+      <dt>BM25</dt><dd>第 <strong>10</strong> 名（bigram 完全不重合，几乎等于没检索到）</dd>
+      <dt>向量</dt><dd>第 <strong>1</strong> 名</dd>
+      <dt>结论</dt><dd>向量在这题上不是小幅领先，是<strong>唯一能答</strong>的那一个</dd>
+    </dl>
+  </div>
+
+  <div class="quote">
+    <p>所以准确的结论不是「向量没用」，而是：<strong>向量的价值只出现在术语不一致的地方，
+    而这份语料几乎没有术语不一致。</strong>作者写、作者读，词表天然对齐。这是语料的性质，不是技术的胜负。</p>
+  </div>
+</section>
+
+<!-- 06 -->
+<section id="bias">
+  <div class="sec-head"><span class="sec-num">06</span><h2>出题偏差自查</h2></div>
+  <p class="sec-sub">这一节是给上面那个「BM25 100%」泼冷水的。</p>
+
+  <p>BM25 拿到 Sec@5 100%，这个数字<strong>太漂亮了，漂亮到可疑</strong>。
+  在相信它之前，我先查了一件事：<strong>这些题是不是我用语料里的词写出来的？</strong></p>
+
+  <p>查法很直接——把题面里的实词拿去语料里搜，看它到底出现在多少篇文档里：</p>
+
+  <table>
+    <thead><tr><th style="width:70px">题号</th><th>题面用词</th><th class="mono" style="width:120px">语料命中篇数</th><th style="width:150px">是否跨术语</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">S1</td><td>脖子发酸</td><td class="mono">2 篇（「颈」24 篇）</td><td><span class="chip mid">半跨</span></td></tr>
+      <tr class="hero-row"><td class="mono">S3</td><td>心率变异性</td><td class="mono">0 篇（「HRV」223 篇）</td><td><span class="chip ok">真跨术语</span></td></tr>
+      <tr><td class="mono">S4</td><td>短板 / 弱项</td><td class="mono">7 篇 / 7 篇</td><td><span class="chip no">同词</span></td></tr>
+      <tr><td class="mono">S5</td><td>8 次 8 组</td><td class="mono">5 篇（原文「8×8」3 篇）</td><td><span class="chip mid">半跨</span></td></tr>
+      <tr><td class="mono">S6</td><td>水还是脂肪</td><td class="mono">5 篇 / 222 篇</td><td><span class="chip no">同词</span></td></tr>
+      <tr><td class="mono">S8</td><td>轻松 / 吃力</td><td class="mono">6 篇 / 5 篇</td><td><span class="chip no">同词</span></td></tr>
+    </tbody>
+  </table>
+
+  <p>结果很清楚：<strong>8 道「语义题」里，只有 1 道是真正的跨术语题</strong>（S3）。
+  其余 7 道我在写题时，脑子里想的词和语料里的词是同一批——因为我出题前先读了语料。</p>
+
+  <div class="quote">
+    <p><strong>这是出题者偏差：我一边看着语料一边出题，写出来的「口语」其实还是语料里的词。</strong>
+    在这个设置下 BM25 拿 100% 是必然的，它甚至不能算一个公平的测试。
+    真实用户不会先读语料再提问，他会说「那个躺着的推胸」「蹬腿的机子」——这类提问我一道都没出。</p>
+  </div>
+
+  <p>所以正确的读法是：<strong>这张表测的是「术语一致时谁更好」，答案是很明确的 BM25；
+  它没有测「术语不一致时谁更好」</strong>，那条只有一个样本（S3），但方向明确。</p>
+
+  <p>我原本还想补一组纯口语题来补这个缺口，做到一半发现做不下去，原因写在第 09 节——
+  那个原因本身比补几道题更有价值。</p>
+</section>
+
+<!-- 07 -->
+<section id="verify">
+  <div class="sec-head"><span class="sec-num">07</span><h2>标注检查抓到 4 道废题</h2></div>
+  <p class="sec-sub">如果先跑数、后核对标注，会得到一个漂亮但完全错的结论。</p>
+
+  <p>评测脚本里有一个不产出任何分数的开关：<code>w5:eval --verify</code>。
+  它只做一件事——回查每道题的标准答案是否<strong>真的能在这 3029 个块里被找到</strong>。
+  找不到就意味着这题<strong>永远不可能答对</strong>，它进分母只会白白拉低所有方案的分数。</p>
+
+  <p>第一次跑，15 题里有 4 题报红：</p>
+
+  <table>
+    <thead><tr><th style="width:60px">题</th><th>我写的答案文件</th><th style="width:110px">库里是否存在</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">K2</td><td class="file">2026-03-26-训练-01-肩.md</td><td><span class="chip no">不存在</span></td></tr>
+      <tr><td class="mono">K3</td><td class="file">2025-12-15-训练-01-肩.md</td><td><span class="chip no">不存在</span></td></tr>
+      <tr><td class="mono">K6</td><td class="file">2025-08-29-训练-01-腿.md</td><td><span class="chip no">不存在</span></td></tr>
+      <tr><td class="mono">K7</td><td class="file">2026-09-06-训练-01-背.md</td><td><span class="chip no">不存在</span></td></tr>
+    </tbody>
+  </table>
+
+  <p>原因是我按「那天练的什么」猜文件名，而真实文件名是：</p>
+
+  <table>
+    <thead><tr><th style="width:60px">题</th><th style="width:230px">真实文件</th><th>里面的动作</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">K2</td><td class="file">2026-03-26-训练-01-腹部.md</td><td>…哑铃推肩 / <strong>布拉德福德推举</strong></td></tr>
+      <tr><td class="mono">K3</td><td class="file">2025-12-15-训练-01-胸三头.md</td><td>蝴蝶机夹胸 / <strong>阿诺德推肩</strong> / 杠铃卧推…</td></tr>
+      <tr><td class="mono">K6</td><td class="file">2025-08-29-训练-01-臀部背.md</td><td>杠铃硬拉 / <strong>腰带臀推</strong> / 俯身杠铃划船</td></tr>
+      <tr><td class="mono">K7</td><td class="file">2026-09-06-训练-01-背+腹.md</td><td>引体 / <strong>绳动单臂划船</strong> / <strong>上斜凳绳索单臂下拉</strong>…</td></tr>
+    </tbody>
+  </table>
+
+  <p>这里有个<strong>顺带发现，比 4 个错字重要</strong>：文件名里的 <code>session</code> 标记和实际内容对不上。
+  「腹部」课里排的是推举，「胸三头」课里有阿诺德推肩。这些是真实数据的历史遗留，
+  也说明<strong>不能拿文件名当检索捷径</strong>——真要这么优化，准确率会在这些记录上直接崩掉。</p>
+
+  <div class="quote">
+    <p>这 4 道题如果没被拦住，最终结果会是「向量 11/15、BM25 11/15」，双双掉到 73%，
+    然后我会去查模型、查参数、查切片——而真正的问题是<strong>答案标错了</strong>。</p>
+  </div>
+</section>
+
+<!-- 08 -->
+<section id="numeric">
+  <div class="sec-head"><span class="sec-num">08</span><h2>数值题：另一条入口</h2></div>
+  <p class="sec-sub">「这个动作我多久没练了」的答案，语料里根本没有一句话写着。</p>
+
+  <p>这类问题是集合差 + 日期减法，本质是查询，不是检索。把它塞进召回率的分母，
+  会同时<strong>低估向量</strong>（它不该答这类题）和<strong>掩盖真问题</strong>（真正该测的语义能力被稀释）。
+  所以单独做一个入口，6 道题各自报数。</p>
+
+  <p>实现上没有魔法，就是把语料解析成结构化数据再算：<code>w5:qa</code>。</p>
+
+  <pre><span class="c">数据：213 次力量训练（2025-08-05 ~ 2026-11-14）+ 156 天睡眠记录</span>
+<span class="c">清洗：2 次时长 &gt;150 分判「忘停表」，不参与 max / 均值</span>
+
+N1 史密斯深蹲我多久没练了   → 上一次 2026-11-14，共练过 24 次
+N2 过去 30 天练了几次腿       → 5 次
+N3 哪次训练时长最长         → 2026-07-22（124.3 分）
+N4 最近一次练背是哪天       → 2026-11-11
+N5 这个月平均睡多少小时     → 6.97 h（14 天，6 天 &lt; 7h）
+N6 深蹲重量在涨还是跌       → 见下</pre>
+
+  <h3>N6 值得单独说：数字对了，结论还可能错</h3>
+  <p>这题第一版跑出来是「在跌」。我核了原始数据，发现<strong>两个坑同时踩了</strong>：</p>
+
+  <table>
+    <thead><tr><th style="width:120px">日期</th><th class="mono">最重</th><th class="mono">容量</th><th>档位</th></tr></thead>
+    <tbody>
+      <tr class="dim"><td class="mono">10-30</td><td class="mono">40 kg</td><td class="mono">720</td><td>试探档（降级复训）</td></tr>
+      <tr><td class="mono">11-07</td><td class="mono">60 kg</td><td class="mono">2060</td><td>正常档，末组掉到 60×6</td></tr>
+      <tr><td class="mono">11-14</td><td class="mono">55 kg</td><td class="mono">2265</td><td>正常档，55×8 做满 4 组</td></tr>
+    </tbody>
+  </table>
+
+  <ul>
+    <li><strong>坑一：看最大重量。</strong>60 → 55，判「在跌」。但容量 2060 → 2265 是涨的
+    ——重量降了次数补回来了，这是典型的容量推进。</li>
+    <li><strong>坑二：不排除降级课。</strong>把 10-30 的 720 混进平均，最近几次的均值被拉低，
+    还是判「在跌」。</li>
+  </ul>
+
+  <p>两个都修掉之后，答案是：<strong>正常档平均容量 1798 → 2163，在涨</strong>，
+  并显式列出被排除的降级课。这条口径写进了脚本注释，防止以后被改回去。</p>
+
+  <div class="quote grey">
+    <p>这一节的意义不在那 6 个答案，而在于说明一件事：<strong>「查得准」和「判得对」是两个问题</strong>。
+    数值入口负责前者，后者需要知道档位、组数、掉力这些上下文——那正是检索和解析要提供的东西。</p>
+  </div>
+</section>
+
+<!-- 09 -->
+<section id="limit">
+  <div class="sec-head"><span class="sec-num">09</span><h2>这些结论我不能下</h2></div>
+  <p class="sec-sub">把边界写清楚，比把结论写漂亮重要。</p>
+
+  <div class="case">
+    <div class="case-top"><span class="case-id">限 01</span><span class="case-name">样本太小，1 题就是 12.5%</span></div>
+    <p>S 组 8 题、K 组 7 题。S 组 7/8 与 8/8 的差别只值一道题，不该拿来宣布「BM25 在语义上更强」。
+    这份数据能支撑的只有<strong>方向性判断</strong>，不能支撑<strong>幅度判断</strong>。</p>
+  </div>
+
+  <div class="case">
+    <div class="case-top"><span class="case-id">限 02</span><span class="case-name">没有人工相关性分级</span></div>
+    <p>判据是二值的：命中那节算对，其它算错。真实检索里还有「部分相关」——命中了同一天的另一节，
+    内容也沾边但没答到点上。这套判据把它算错，可能偏严，也可能偏松。要做严格评测，
+    这 15 题需要标 0/1/2 三级相关性，各标 3 人取共识，我没有做。</p>
+  </div>
+
+  <div class="case">
+    <div class="case-top"><span class="case-id">限 03</span><span class="case-name">纯口语题出不出来，这本身是结论</span></div>
+    <p>我试着补一组「真实用户会怎么说」的题，比如「那个蹬腿的机器」「拉背最宽的那个」。
+    做到一半停了，原因是<strong>无法保证标准答案唯一</strong>：语料里同一个动作重复出现几十次，
+    任何一句不含日期、不含动作名的描述都会对应十几篇文档。</p>
+    <p>这不是出题的失败，是语料的性质：<strong>知识分散在高度重复的记录里</strong>，
+    所以在这份语料上，「语义检索」的价值上限本来就低——能提的问题大多需要精确定位，而不是语义联想。
+    要真正测出向量的价值，得引入一份有论述、有观点、有同义改写的语料。</p>
+  </div>
+
+  <div class="case">
+    <div class="case-top"><span class="case-id">限 04</span><span class="case-name">语料只有「每日记录」</span></div>
+    <p>知识库里还有计划文档、知识笔记、复盘，这一轮全部没有进库。那些才是论述性文本，
+    也才是向量该发挥的地方。所以「向量在这份语料上没用」不能推广成「向量在这个项目里没用」。</p>
+  </div>
+
+  <div class="case">
+    <div class="case-top"><span class="case-id">限 05</span><span class="case-name">单机、单模型、单次运行</span></div>
+    <p>只有 bge-m3 一个嵌入模型，没和别的模型对比；温度对嵌入无影响，但没跑多次取方差。
+    换模型后这些数字必须重测，包括「BM25 更好」这个结论本身。</p>
+  </div>
+</section>
+
+<!-- 10 -->
+<section id="next">
+  <div class="sec-head"><span class="sec-num">10</span><h2>下一步</h2></div>
+  <p class="sec-sub">按「能改变结论」的程度排序，不按容易程度排序。</p>
+
+  <div class="next">
+    <ol>
+      <li><strong>把论述性语料进库。</strong>计划文档、知识笔记、复盘——这些才是向量该赢的地方。
+      现在测的是一批同质模板，结论的适用范围被语料限死了。</li>
+      <li><strong>补一组真·跨术语题。</strong>像 S3 那样，题面用中文全称、语料用英文缩写（或反之）。
+      至少 10 题，才能说「向量在术语不一致时更好」这句话。</li>
+      <li><strong>做混合检索。</strong>BM25 和向量各有胜场，最省事的做法是两个都跑、按 RRF 融合。
+      按这次的数字，融合至少不会比 BM25 差，且在 S3 那类题上能补上。</li>
+      <li><strong>小块合并实验。</strong>S8 那题向量排第 7，原因是答案被切成了几个短块、语义不完整。
+      把 20 字以下的相邻块合并再嵌入，看能不能补回来。</li>
+      <li><strong>人工相关性分级。</strong>把二值判据换成 0/1/2，重标这 15 题，看结论是否稳健。</li>
+    </ol>
+  </div>
+
+  <h3>关于「要不要现在就换 BM25」</h3>
+  <p>不建议。理由不是向量还有希望，而是<strong>现在换等于用一份有偏差的评测做决定</strong>——
+  第 06 节已经证明这批题偏向 BM25。正确顺序是先把语料和题目都补强，再回来比一次；
+  如果那时 BM25 还是赢，就痛快换掉，63 MB 和 76 秒的建库成本没必要留着。</p>
+
+  <p>还有一件更实际的事：<strong>现在根本没有线上查询入口</strong>。这 3029 个块的索引只存在于
+  评测脚本里，App 侧一次都没调用过。所以「用哪个」目前还是个纸面问题，
+  真正的成本要等接进查询链路才看得见。</p>
+</section>
+
+<!-- 11 -->
+<section id="concept">
+  <div class="sec-head"><span class="sec-num">11</span><h2>关键概念</h2></div>
+  <p class="sec-sub">五个，每个附一个自检问题。答不上来说明这段白跑了。</p>
+
+  <div class="kp">
+    <div class="kp-h"><span class="i">01</span><h4>稀疏检索与稠密检索</h4></div>
+    <p>BM25 是稀疏的：它只统计词，没有「理解」。向量的稠密表示能把「心率变异性」和「HRV」映射到相近位置，
+    但它也可能把「史密斯深蹲」和「史密斯窄推」映射得太近——因为语义上它们确实很像。
+    <strong>一个靠字面精确，一个靠语义模糊</strong>，胜负取决于你问的是哪种问题。</p>
+    <div class="selfcheck"><b>自检</b> 为什么 BM25 在「史密斯窄推」这类查询上不容易被「史密斯推胸」干扰，向量却容易？</div>
+  </div>
+
+  <div class="kp">
+    <div class="kp-h"><span class="i">02</span><h4>为什么基线要用最强的朴素方法</h4></div>
+    <p>给基线放水，会让任何方案看起来都有效。这里的 BM25 用了中文 bigram、没砍停用词、参数用默认的
+    k1=1.2 / b=0.75——这些都是「认真搭」的表现。如果它赢了，就得承认它赢。</p>
+    <div class="selfcheck"><b>自检</b> 如果我把 BM25 换成「只匹配完整词、不做 bigram」，结论会变成什么？为什么会变？</div>
+  </div>
+
+  <div class="kp">
+    <div class="kp-h"><span class="i">03</span><h4>Doc@k 与 Sec@k 为什么必须分开</h4></div>
+    <p>一篇训练记录有 8 个动作块。只测 Doc@k，等于只要求「翻到那一页」；用户要的是「指对那一个动作」。
+    两者差 20 个点的时候，说明检索器找得到文档但定位不到节——这在长文档场景里是常态。</p>
+    <div class="selfcheck"><b>自检</b> 固定切方案 Doc@1 87%、Sec@1 53%，这 34 个点的差距说明了什么？</div>
+  </div>
+
+  <div class="kp">
+    <div class="kp-h"><span class="i">04</span><h4>标注可行性检查</h4></div>
+    <p>跑分之前先确认「答案在库里能被找到」。这一步不产出任何指标，却能拦住最致命的一类错误：
+    标准答案标错了，所有方案一起被扣分，然后你去优化模型。</p>
+    <div class="selfcheck"><b>自检</b> 如果 15 题里 4 题标准答案指向的文件不存在，最终各项指标会怎么变？</div>
+  </div>
+
+  <div class="kp">
+    <div class="kp-h"><span class="i">05</span><h4>出题者偏差</h4></div>
+    <p>谁出的题，谁的词表就会渗进题面。一边读语料一边写题，写出来的「自然语言提问」其实还是语料里的词，
+    于是关键词检索必胜。<strong>要测语义能力，题目必须来自不看语料的人</strong>——或者至少来自「先写题、后查答案」的顺序。</p>
+    <div class="selfcheck"><b>自检</b> 这 15 道题里，有几道是你「先读了语料才写的」？这个比例会让哪个方案受益？</div>
+  </div>
+</section>
+
+<footer>
+  <div class="rule"></div>
+  健身 Agent · W3–W5 检索评测<br>
+  2026-11-15 · 本机 Ollama · bge-m3（1024 维）/ BM25（中文 bigram, k1=1.2, b=0.75）<br>
+  语料：804 篇每日记录（2025-08-05 ~ 2026-11-14）· 3029 chunk · 15 道向量题 + 6 道数值题<br>
+  复现：<code>npm run w5:index</code> → <code>npm run w5:eval -- --verify</code> → <code>npm run w5:eval</code> → <code>npm run w5:qa</code>
+</footer>
+
+</div>
+</body>
+</html>
