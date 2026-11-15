@@ -36,7 +36,7 @@ interface Check {
   noAnswer: boolean;
 }
 
-type Route = "retrieve" | "trend" | "count";
+type Route = "retrieve" | "trend" | "count" | "latest";
 
 interface View {
   answer: string;
@@ -67,6 +67,7 @@ const ROUTE_LABEL: Record<Route, string> = {
   retrieve: "",
   trend: "数值入口 · 趋势（算好再答）",
   count: "数值入口 · 计数（遍历全库数）",
+  latest: "数值入口 · 定位（取最晚一条）",
 };
 
 /** 把 [1] [2] 渲染成可点的角标，其余原样 */
@@ -295,7 +296,7 @@ export default function Home() {
         检索：BM25 + 时间重排（{index ? `${index.chunks} 块 / ${index.docs} 篇` : "索引加载中"}）·
         生成：本机 Ollama，不出本机 · 流式 SSE，可随时取消
         <br />
-        命令行等价物：<code>npm run w6:ask</code>（11 题判据）· <code>npm run w7:count</code>（计数工具）·{" "}
+        命令行等价物：<code>npm run w6:ask</code>（19 题判据）· <code>npm run w7:count</code>（计数工具）·{" "}
         <code>npm run w6:debug -- --q &quot;…&quot;</code>（看检索排名）
       </footer>
     </div>

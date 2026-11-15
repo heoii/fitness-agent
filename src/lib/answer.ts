@@ -12,11 +12,13 @@
 import { retrieve, type Hit } from "./retrieve";
 import {
   countTraining,
+  latestSession,
   getExerciseTrend,
   listExercises,
   resolveMuscle,
   resolvePeriod,
   type CountResult,
+  type LatestResult,
   type TrendResult,
 } from "./tools";
 import { OLLAMA_MODEL, OLLAMA_URL } from "./extract";
@@ -59,12 +61,13 @@ export interface AskResult {
     ms: { retrieve: number; generate: number; total: number };
     k: number;
     /** 走了哪条入口：retrieve = 语义检索；trend = 数值工具（算好的字段，模型只表述）；
-     *  count = 计数工具（遍历全语料数出来的次数） */
+     *  count = 计数工具（遍历全语料数出来的次数）
+     *  latest = 定位工具（遍历全语料取的最晚一条） */
     route: Route;
   };
 }
 
-export type Route = "retrieve" | "trend" | "count";
+export type Route = "retrieve" | "trend" | "count" | "latest";
 
 /**
  * 「这次问答该怎么答」的决策结果。
@@ -299,6 +302,7 @@ ${rows}
 要求：
 1. 直接报上面的数字，**不要自己从明细里重新数**，也不要加减。
 2. 两个数都要报：以它为**重点**的几次、把它**算上辅助**的几次。只报一个会误导。
+   数字直接写在句子里（如「2 次」），**不要用引用编号代替数字**——写成「课 [3] 次」会被读成编号。
 3. 必须点明区间（${c.periodLabel}），否则「几次」没有意义。
 4. 报次数时用 [n] 标出依据的是哪几条明细，编号对应上面方括号里的数字。
 5. 不要提到「计划里取消的课」之类不在明细里的东西来推断次数。
@@ -314,6 +318,86 @@ ${rows}
  * 让 7B 去复述一个空结果，它有一定概率自己补一个数字出来，
  * 而这里根本没有需要润色的内容。
  */
+/* ─────────── 定位入口：最近一次是什么时候 ─────────── */
+
+/**
+ * 「上次 / 最近一次 / 什么时候」。
+ *
+ * 这题检索答不出来——实测 top5 里明明有 11-15 的游泳记录，7B 仍回「资料里没有找到」。
+ * 因为答案不在任何一段文字里，它是全库上的 max(date)，还要排除计划文档里
+ * 「~~游泳自练②~~」这种写了但没做的事。和计数同一类，只是聚合函数不同。
+ */
+const LOCATE_INTENT = /上次|上回|上一次|最近一次|什么时候|哪一天|哪天|多久没/;
+
+function planLatest(question: string): Plan | null {
+  if (!LOCATE_INTENT.test(question)) return null;
+  const muscle = resolveMuscle(question);
+  const exercise = muscle ? null : matchExercise(question);
+  // 认不出「问的是哪个部位/动作」就不接：像「什么时候该减载」这种问的是规则，
+  // 硬按「最近一次减载」去查会给出一个驴唇不对马嘴的日期
+  if (!muscle && !exercise) return null;
+
+  let l: LatestResult;
+  try {
+    l = latestSession({ muscle, exercise });
+  } catch {
+    return null;
+  }
+
+  if (!l.ok)
+    return {
+      route: "latest",
+      citations: [],
+      k: 0,
+      prompt: null,
+      fixedAnswer: `${l.reason}。如果统计口径不对（比如你想问的是别的部位），告诉我具体名字我再查。`,
+      retrieveMs: 0,
+      numPredict: 0,
+    };
+
+  return {
+    route: "latest",
+    citations: [
+      {
+        n: 1,
+        doc: l.docName,
+        date: l.date,
+        label: `${l.docName} > ${l.session || "训练"} > 动作明细`,
+        headingPath: [l.session || "训练", "动作明细"],
+        snippet: [l.muscleFocus.length ? `重点 ${l.muscleFocus.join("/")}` : "", l.exercises.join("、")]
+          .filter(Boolean)
+          .join("｜"),
+        score: 0,
+      },
+    ],
+    k: 1,
+    prompt: buildLatestPrompt(l, question),
+    retrieveMs: 0,
+    numPredict: 120,
+  };
+}
+
+function buildLatestPrompt(l: LatestResult, question: string): string {
+  return `下面这条是系统**遍历全部训练记录取出的最晚一条**，准确，直接引用，不要自己去比明细里的日期。
+
+统计对象：${l.target}
+最近一次：${l.date}${l.session ? `（${l.session}）` : ""}
+距今：${l.daysAgo} 天
+那节课的重点部位：${l.muscleFocus.join("/") || "无"}
+那节课的动作：${l.exercises.join("、") || "无"}
+更早一次（**不是答案**，只用来证明这不是唯一一次）：${l.previous ? l.previous.date : "无，语料里只有这一次"}
+
+系统结论：${l.summary}
+
+要求：
+1. 答案就是「最近一次」那个日期（${l.date}），**不要**报成下面「更早一次」的日期。
+2. 用 [1] 标出处。如果用户问「多久没练」，把「距今 N 天」一起报出来。
+3. 计划里写了但没做的课不算——不要拿明细里没有的东西推断。
+4. 中文，不超过 60 字。
+
+问题：${question}`;
+}
+
 function planCount(question: string): Plan | null {
   if (!COUNT_INTENT.test(question)) return null;
   const muscle = resolveMuscle(question);
@@ -431,6 +515,10 @@ function pick(question: string, k: number, noTools?: boolean): Plan | { error: s
   if (!noTools) {
     const c = planCount(question);
     if (c) return c;
+    // 定位先于趋势：「上次深蹲是什么时候」不含涨跌词，但若哪天含了就归定位——
+    // 定位的答案是日期，趋势的答案是百分比，冲突时以「用户到底在问哪个」为准
+    const l = planLatest(question);
+    if (l) return l;
     const t = planTrend(question);
     if (t) return t;
   }

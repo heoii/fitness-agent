@@ -538,6 +538,98 @@ function loadSessions(): SessIdx {
 }
 
 /**
+ * 「最近一次 X 是什么时候」。
+ *
+ * 实测这题检索答不出来：问「最近一次游泳是什么时候」，top5 里明明有 11-15 的游泳记录，
+ * 7B 仍回「资料里没有找到」——因为**答案不在任何一段文字里**，它是全库上的 max(date)，
+ * 而且要排除计划文档里「~~游泳自练②~~」这种没发生的事。
+ * 这和计数是同一类问题，只是聚合函数不同（max 而不是 count），所以走同一层。
+ */
+export interface LatestResult {
+  ok: boolean;
+  target: string;
+  date: string;
+  session: string;
+  docName: string;
+  docPath: string;
+  muscleFocus: string[];
+  exercises: string[];
+  daysAgo: number;
+  /** 倒数第二次，用来支撑「这是最近一次」而不是「唯一一次」 */
+  previous: { date: string; docName: string } | null;
+  summary: string;
+  reason?: string;
+}
+
+export function latestSession(
+  args: { muscle?: string | null; exercise?: string | null },
+  opts: { refDate?: Date } = {}
+): LatestResult {
+  const { muscle = null, exercise = null } = args;
+  const target = muscle ?? exercise ?? "";
+  const empty = (reason: string): LatestResult => ({
+    ok: false,
+    target,
+    date: "",
+    session: "",
+    docName: "",
+    docPath: "",
+    muscleFocus: [],
+    exercises: [],
+    daysAgo: 0,
+    previous: null,
+    summary: "",
+    reason,
+  });
+
+  let idx: SessIdx;
+  try {
+    idx = loadSessions();
+  } catch (e) {
+    return empty(e instanceof Error ? e.message : "语料不可读");
+  }
+
+  const hits = idx.rows
+    .map(({ doc, rec }) => {
+      const focusParts = rec ? rec.muscleFocus : fmList(doc, "muscle_focus");
+      const groupParts = rec ? rec.muscleGroups : fmList(doc, "muscle_groups");
+      const names = rec ? rec.exercises.map((x) => x.name) : [];
+      const hit = muscle ? groupParts.includes(muscle) : names.some((n) => n.includes(exercise as string));
+      return { doc, rec, focusParts, names, hit, date: doc.date ?? doc.name.slice(0, 10) };
+    })
+    .filter((x) => x.hit)
+    .sort((a, b) => b.date.localeCompare(a.date));
+
+  if (!hits.length) return empty(`语料里没有${muscle ? `以「${muscle}」` : `含「${exercise}」`}的训练记录`);
+
+  const [top, second] = hits;
+  const ref = opts.refDate ?? new Date();
+  const daysAgo = Math.max(0, Math.round((ref.getTime() - Date.parse(top.date)) / 86_400_000));
+  const sessionName =
+    (top.rec?.session ?? (typeof top.doc.fm.session === "string" ? top.doc.fm.session : "")) || "";
+
+  return {
+    ok: true,
+    target,
+    date: top.date,
+    session: sessionName,
+    docName: top.doc.name,
+    docPath: top.doc.path,
+    muscleFocus: top.focusParts,
+    exercises: top.names.slice(0, 5),
+    daysAgo,
+    previous: second ? { date: second.date, docName: second.doc.name } : null,
+    summary:
+      `最近一次${muscle ? `以「${muscle}」为参与部位` : `含「${exercise}」`}的训练是 ${top.date}` +
+      `${sessionName ? `（${sessionName}）` : ""}，距今天 ${daysAgo} 天。` +
+      (second
+        ? `上一次是 ${second.date}，所以这不是唯一一次。`
+        : `语料里只有这一次，别当成规律。`) +
+      `\n这个日期是遍历全部训练记录取的最晚一条，不是从检索到的几段里挑的——片段里出现的计划文档（写了但没做的课）不算。`,
+  };
+}
+
+/**
  * 数区间内的训练节数。
  *
  * 双口径是必须的，理由和趋势那边一样：`muscle_focus` 只记重点部位，

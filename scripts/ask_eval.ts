@@ -54,6 +54,29 @@ const QUESTIONS: Q[] = [
     expectCount: 2,
     note: "需要计数；第一版答「1 次」，依据是片段里「11-04 腿日被取消」",
   },
+  { id: "C3", q: "上个月练了几次腿", kind: "needs-math", expectCount: 4, note: "2026-10：10-09 / 10-17 / 10-22 / 10-30（末次是试探档）" },
+  { id: "C4", q: "这个月有氧几次", kind: "needs-math", expectCount: 3, note: "游泳课没有动作明细，是计数层第一个静默 bug 的来源" },
+  {
+    id: "C5",
+    q: "史密斯深蹲最近是在涨还是在跌",
+    kind: "needs-math",
+    note: "必须报双口径（含热身 +4.9% / 剔除 −12.8%）",
+  },
+
+  // ——— W7·5 扩的 8 题：覆盖时间定位、跨目录、以及更多拒答 ———
+  { id: "A8", q: "上一次腿课是哪天", kind: "answerable", expectDoc: "2026-11-14", note: "定位型：要给日期，不是给建议" },
+  { id: "A9", q: "最近一次游泳是什么时候", kind: "answerable", expectDoc: "2026-11-15" },
+  {
+    id: "A10",
+    q: "蛋白粉一天最多喝几勺",
+    kind: "answerable",
+    expectDoc: "食材库存",
+    // 这条答案只写在 `05 计划与复盘/食材库存.md`，不扩语料到整个知识库就找不到——
+    // 它是 KB_DIRS 那条改动的验收题，不是凑数的
+    note: "答案在 05 计划与复盘，只索引每日记录时查不到",
+  },
+  { id: "B3", q: "我第一次跑全马的完赛成绩是多少", kind: "absent" },
+  { id: "B4", q: "2020 年我的深蹲最大重量是多少", kind: "absent", note: "语料从 2025 年开始" },
 ];
 
 interface Row {
@@ -90,9 +113,12 @@ function isRefusal(answer: string): boolean {
  * 后来接了工具路由、答出双口径，又判失败一次。**判据跟不上实现，就会把对的判成错的。**
  */
 function numbersIn(answer: string): number[] {
-  const arabic = [...answer.matchAll(/(\d+)\s*(?:次|节|回)/g)].map((m) => Number(m[1]));
+  // 模型会把引用编号当数字用：「以「有氧」为重点的课 [3] 次」——它想说的是 3 次。
+  // 不认这种写法会把**答对的判成答错**，而错的其实是表达方式。
+  const norm = answer.replace(/\[(\d+)\]\s*(次|节|回)/g, "$1 $2");
+  const arabic = [...norm.matchAll(/(\d+)\s*(?:次|节|回)/g)].map((m) => Number(m[1]));
   const cn: Record<string, number> = { 一: 1, 两: 2, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
-  const chinese = [...answer.matchAll(/([一两二三四五六七八九十])\s*(?:次|节|回)/g)].map((m) => cn[m[1]]);
+  const chinese = [...norm.matchAll(/([一两二三四五六七八九十])\s*(?:次|节|回)/g)].map((m) => cn[m[1]]);
   return [...arabic, ...chinese];
 }
 
@@ -173,6 +199,38 @@ async function main() {
     groupOk(citedN, answerable.length) && groupOk(absentN, absent.length) && groupOk(mathN, math.length);
   const covered = [ok.length > 0, ok.length > 0, answerable.length > 0, absent.length > 0, math.length > 0].filter(Boolean).length;
   console.log(`\n${pass ? "✓ 全过" : "✗ 有判据未过"}（覆盖 ${covered}/5 组判据）`);
+
+  /*
+   * 分类准确率 + 未达标明细。
+   *
+   * 加这一段是因为「A–E 全过」会掩盖某一类全崩：E 只要 2/2 就算过，
+   * 而它只考了 2 道算数题。把题库按「这题到底在考什么」拆开看，
+   * 才能发现「拒答题好、计数题差」这种结构性缺口。
+   * 未达标明细要带**题号和原因**，它就是这个项目的待办清单。
+   */
+  const good = (x: Row): boolean => {
+    if (!x.r.ok) return false;
+    if (x.q.kind === "answerable") return x.r.check.refs.length > 0 && !x.r.check.noAnswer && x.labelOk;
+    if (x.q.kind === "absent") return x.r.check.noAnswer;
+    return mathOk(x.r, x.q.expectCount);
+  };
+  console.log("\n分类准确率");
+  for (const k of ["answerable", "absent", "needs-math"] as Kind[]) {
+    const g = rows.filter((x) => x.q.kind === k);
+    if (!g.length) continue;
+    const hit = g.filter(good).length;
+    console.log(`  ${k.padEnd(12)} ${hit}/${g.length}`);
+  }
+
+  const bad = rows.filter((x) => !good(x));
+  if (bad.length) {
+    console.log("\n未达标明细");
+    for (const x of bad) {
+      const why = !x.r.ok ? `出错：${x.r.reason}` : `不满足判据（route=${x.r.meta.route}）`;
+      console.log(`  ${x.q.id}  ${x.q.q}\n      → ${why}`);
+    }
+  }
+
   if (!pass) process.exitCode = 1;
 }
 
