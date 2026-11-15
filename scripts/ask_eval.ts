@@ -7,7 +7,8 @@
  *   B. **引用可定位**：每条 citation 的 label 形如 `文件.md > 标题 > 子标题`
  *   C. **有答案的题必须真的引用**：不允许空引用 + 通篇"我觉得"
  *   D. **库里没有的必须承认**：`check.noAnswer` 为 true，不许编数字
- *   E. **要算数的必须拒绝**：不能从原始组次直接下"在涨/在跌"
+ *   E. **要算数的走工具**：计数题须报对数、趋势题须报双口径，做不到才允许拒答
+ *      ——绝不能从检索到的几段里数，那 5 段是最相关的 5 条，不是全部 5 条
  *
  * 用法: npm run w6:ask
  */
@@ -24,6 +25,12 @@ interface Q {
   /** answerable 时，答案该落在哪些文档（用于人工核对，脚本不强制） */
   expectDoc?: string;
   note?: string;
+  /**
+   * needs-math 且有确定答案时，答案里必须出现这个数。
+   * 只能是**人工核过语料**的值（2026-11 的腿课：11-07、11-14 两节），
+   * 不许从工具输出里抄——否则工具算错，判据跟着一起错，等于没判。
+   */
+  expectCount?: number;
 }
 
 const QUESTIONS: Q[] = [
@@ -39,7 +46,14 @@ const QUESTIONS: Q[] = [
   { id: "B2", q: "我上一次马拉松的成绩是多少？", kind: "absent" },
   // ——— 需要算数：正确行为是拒绝下结论，并列出原始数据 ———
   { id: "C1", q: "我深蹲的重量最近在涨还是在跌？", kind: "needs-math", note: "正确做法：说明需要结构化统计" },
-  { id: "C2", q: "我这个月一共练了几次腿？", kind: "needs-math", note: "需要计数，不该从检索片段里数" },
+  {
+    id: "C2",
+    q: "我这个月一共练了几次腿？",
+    kind: "needs-math",
+    // 人工核对：11-07 腿A、11-14 腿A（正常档），共 2 节
+    expectCount: 2,
+    note: "需要计数；第一版答「1 次」，依据是片段里「11-04 腿日被取消」",
+  },
 ];
 
 interface Row {
@@ -67,17 +81,50 @@ function isRefusal(answer: string): boolean {
   return /需要结构化统计|算不准|不能从|无法从|无法判断|不能判断|不能确定|无从判断|没有找到|未找到/.test(answer);
 }
 
+/**
+ * 「要算数」类题的正确行为有**三种**，判据必须都认：
+ *   ① 走计数入口（route=count）：答案里必须出现**人工核对过的**那个数；
+ *   ② 走数值入口（route=trend）：答案里必须出现**两个口径**的百分比；
+ *   ③ 都没走：必须拒绝下结论。
+ * 前两版只认 ③，于是 C1 走向量入口时明明答了「无法判断…是涨是跌」被判失败，
+ * 后来接了工具路由、答出双口径，又判失败一次。**判据跟不上实现，就会把对的判成错的。**
+ */
+function numbersIn(answer: string): number[] {
+  const arabic = [...answer.matchAll(/(\d+)\s*(?:次|节|回)/g)].map((m) => Number(m[1]));
+  const cn: Record<string, number> = { 一: 1, 两: 2, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+  const chinese = [...answer.matchAll(/([一两二三四五六七八九十])\s*(?:次|节|回)/g)].map((m) => cn[m[1]]);
+  return [...arabic, ...chinese];
+}
+
+function mathOk(r: AskResult, expectCount?: number): boolean {
+  if (r.meta.route === "count") {
+    if (expectCount === undefined) return true;
+    return numbersIn(r.answer).includes(expectCount);
+  }
+  if (r.meta.route === "trend") {
+    const hasTwoCalibers = (r.answer.match(/[+\-]?\d+(\.\d+)?%/g) ?? []).length >= 2;
+    const mentionsWarmup = /热身/.test(r.answer);
+    return hasTwoCalibers && mentionsWarmup;
+  }
+  return isRefusal(r.answer);
+}
+
 async function main() {
   kbDir(); // 触发 .env.local 加载（scripts/kb-dir.ts 在模块顶层做）
+  // --only C 只跑 id 以 C 开头的题。调参时跑全量要 1 分钟，改一句 prompt 等一分钟太久，
+  // 人会开始「跑一次看看大差不差就算过」——判据就是这么松掉的。
+  const only = process.argv.find((a) => a.startsWith("--only="))?.split("=")[1];
+  const list = only ? QUESTIONS.filter((q) => q.id.startsWith(only)) : QUESTIONS;
+  if (!list.length) throw new Error(`--only=${only} 没有匹配的题`);
   const meta = indexMeta();
   console.log(`索引：${meta.chunks} 块 / ${meta.docs} 篇（建库 ${meta.builtMs.toFixed(0)} ms）`);
-  console.log(`题量：${QUESTIONS.length}（有答案 ${QUESTIONS.filter((q) => q.kind === "answerable").length} / ` +
-    `库里没有 ${QUESTIONS.filter((q) => q.kind === "absent").length} / ` +
-    `要算数 ${QUESTIONS.filter((q) => q.kind === "needs-math").length}）`);
+  console.log(`题量：${list.length}${only ? `（--only=${only}）` : ""}（有答案 ${list.filter((q) => q.kind === "answerable").length} / ` +
+    `库里没有 ${list.filter((q) => q.kind === "absent").length} / ` +
+    `要算数 ${list.filter((q) => q.kind === "needs-math").length}）`);
   console.log("=".repeat(78));
 
   const rows: Row[] = [];
-  for (const q of QUESTIONS) {
+  for (const q of list) {
     const r = await ask(q.q);
     const labelOk = r.citations.length > 0 && r.citations.every((c) => labelParsable(c.label));
     const refused = isRefusal(r.answer);
@@ -88,7 +135,7 @@ async function main() {
         `${r.check.invalid.length ? `  ⚠ 越界 [${r.check.invalid.join(",")}]` : ""}` +
         `${r.citations[0] ? `  首位 ${r.citations[0].label.slice(0, 46)}` : ""}`
     );
-    console.log(`   ${r.meta.ms.retrieve}ms 检索 + ${(r.meta.ms.generate / 1000).toFixed(1)}s 生成`);
+    console.log(`   [${r.meta.route}] ${r.meta.ms.retrieve}ms 检索 + ${(r.meta.ms.generate / 1000).toFixed(1)}s 生成`);
     console.log(`   ${r.answer.replace(/\n+/g, " ").slice(0, 300)}`);
   }
 
@@ -101,13 +148,16 @@ async function main() {
   const absent = rows.filter((x) => x.q.kind === "absent" && x.r.ok);
   const absentN = absent.filter((x) => x.r.check.noAnswer).length;
   const math = rows.filter((x) => x.q.kind === "needs-math" && x.r.ok);
-  const mathN = math.filter((x) => x.refused).length;
+  const mathN = math.filter((x) => mathOk(x.r, x.q.expectCount)).length;
 
-  const A = `${invalidFree}/${ok.length}`;
-  const B = `${labelOkN}/${ok.length}`;
-  const C = `${citedN}/${answerable.length}`;
-  const D = `${absentN}/${absent.length}`;
-  const E = `${mathN}/${math.length}（人工判读）`;
+  // 分母为 0 时写「未覆盖」而不是 0/0 然后算通过——--only=C 那次就是这么
+  // 显示「✓ A–D 全过」的，实际上 A–D 一条都没跑。空洞通过比失败更危险。
+  const frac = (n: number, d: number) => (d === 0 ? "未覆盖" : `${n}/${d}`);
+  const A = frac(invalidFree, ok.length);
+  const B = frac(labelOkN, ok.length);
+  const C = frac(citedN, answerable.length);
+  const D = frac(absentN, absent.length);
+  const E = `${frac(mathN, math.length)}（count 须报对数 / trend 须报双口径 / 否则须拒答）`;
   const avg = (ok.reduce((s, x) => s + x.r.meta.ms.total, 0) / (ok.length || 1) / 1000).toFixed(1);
 
   console.log("\n" + "=".repeat(78));
@@ -115,11 +165,14 @@ async function main() {
   console.log(`B 引用可定位（有标题路径）  ${B}`);
   console.log(`C 有答案的题真的引用了     ${C}`);
   console.log(`D 库里没有的承认没找到     ${D}`);
-  console.log(`E 要算数的拒绝下结论       ${E}`);
+  console.log(`E 要算数的走工具而非硬答    ${E}`);
   console.log(`  平均端到端              ${avg} s（本机 7B，同步非流式）`);
 
-  const pass = invalidFree === ok.length && labelOkN === ok.length && citedN === answerable.length && absentN === absent.length;
-  console.log(`\n${pass ? "✓ A–D 全过" : "✗ 有判据未过"}${pass && mathN === math.length ? "，E 也全过" : ""}`);
+  const groupOk = (n: number, d: number) => d === 0 || n === d;
+  const pass = groupOk(invalidFree, ok.length) && groupOk(labelOkN, ok.length) &&
+    groupOk(citedN, answerable.length) && groupOk(absentN, absent.length) && groupOk(mathN, math.length);
+  const covered = [ok.length > 0, ok.length > 0, answerable.length > 0, absent.length > 0, math.length > 0].filter(Boolean).length;
+  console.log(`\n${pass ? "✓ 全过" : "✗ 有判据未过"}（覆盖 ${covered}/5 组判据）`);
   if (!pass) process.exitCode = 1;
 }
 

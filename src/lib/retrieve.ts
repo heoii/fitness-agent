@@ -65,30 +65,49 @@ interface Built {
 // 生产环境单进程只建一次。
 const g = globalThis as unknown as { __kbIndex?: Built };
 
-/** 语料根。.env.local 里配置；Next 自身会加载 .env.local，不需要额外依赖。 */
-function kbDir(): string {
+/**
+ * 语料根，支持**多个目录**。
+ *
+ * 为什么需要多目录：只索引 `01 每日记录` 时，问「自由泳高肘抱水怎么练」的 top5
+ * 全是「自动统计」块，含「高肘」的那块排 #11；扩到整个知识库后它排 **#1**
+ * （分数 25.63，标题正是「四、关键技术要点」）—— 因为技术要领本来就写在
+ * `05 计划与复盘/计划/` 里，不在每日记录里。**那不是检索器的问题，是范围问题。**
+ *
+ * 但默认仍只取 KB_DIR：W5 的 15 题基线是在单目录上测的，换范围历史数字就不可比。
+ * 要扩范围就显式配 `KB_DIRS=/a,/b`，并重跑 `npm run w5:eval`。
+ */
+function kbDirs(): string[] {
+  const multi = process.env.KB_DIRS;
+  if (multi) {
+    const dirs = multi.split(",").map((s) => s.trim()).filter(Boolean);
+    if (dirs.length) return dirs;
+  }
   const dir = process.env.KB_DIR;
-  if (!dir) throw new Error("缺少环境变量 KB_DIR（在仓库根目录的 .env.local 里配）");
-  return dir;
+  if (!dir) throw new Error("缺少环境变量 KB_DIR 或 KB_DIRS（在仓库根目录的 .env.local 里配）");
+  return [dir];
 }
 
 function build(): Built {
   const t0 = performance.now();
-  const dir = kbDir();
-  const files = walkMarkdown(dir);
+  const dirs = kbDirs();
   const chunks: Chunk[] = [];
-  for (const f of files) {
-    const doc = loadDoc(f, dir);
-    // stub（正文 < 20 字）不进库，和 build_index 同一口径
-    for (const c of chunkDoc(doc)) if (!c.stub) chunks.push(c);
+  let docs = 0;
+  for (const dir of dirs) {
+    const files = walkMarkdown(dir);
+    docs += files.length;
+    for (const f of files) {
+      const doc = loadDoc(f, dir);
+      // stub（正文 < 20 字）不进库，和 build_index 同一口径
+      for (const c of chunkDoc(doc)) if (!c.stub) chunks.push(c);
+    }
   }
   const bm25 = new BM25Index(chunks.map((c) => ({ text: flatText(c) })));
   return {
     bm25,
     chunks,
     builtMs: performance.now() - t0,
-    docs: files.length,
-    dir,
+    docs,
+    dir: dirs.join(","),
     builtAt: new Date().toISOString(),
   };
 }
@@ -122,7 +141,7 @@ const TIME_WORDS = /最近|近期|上次|上回|这几次|这几天|现在|当�
  * 所以剥掉它们，时间信息交给 recencyFactor 处理，不靠文本匹配。
  */
 const QUERY_NOISE =
-  /最近|近期|近来|现在|当前|目前|今天|昨天|本周|这周|上周|上个?月|今年|去年|这次|上次|上回|前几次|这几次|这几天|还是|是不是|是否|有没有|什么|怎么|为什么|多少|哪次|哪一天|哪个|可以|应该|需要|帮我|告诉我|看一下|一下|大概|一般|比较|有点|感觉|如何/g;
+  /最近|近期|近来|现在|当前|目前|今天|昨天|本周|这周|上周|上个?月|今年|去年|这次|上次|上回|前几次|这几次|这几天|还是|是不是/g;
 
 function cleanQuery(q: string): string {
   return q.replace(QUERY_NOISE, " ").replace(/\s+/g, " ").trim();

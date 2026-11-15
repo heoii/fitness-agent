@@ -67,6 +67,16 @@ export class BM25Index {
     this.avgLen = this.len.reduce((a, b) => a + b, 0) / (docs.length || 1);
   }
 
+  /** 某个 token 出现在多少个文档里。给上层做「稀有词」判断用，不影响打分。 */
+  documentFrequency(token: string): number {
+    return this.df.get(token) ?? 0;
+  }
+
+  /** 文档数 */
+  get size(): number {
+    return this.docs.length;
+  }
+
   /** 返回每个文档的分数（与 docs 同序） */
   score(query: string): number[] {
     const qToks = tokenize(query);

@@ -38,7 +38,7 @@ interface Answer {
   citations: Citation[];
   check: Check;
   reason?: string;
-  meta: { model: string; ms: { retrieve: number; generate: number; total: number }; k: number };
+  meta: { model: string; ms: { retrieve: number; generate: number; total: number }; k: number; route?: "retrieve" | "trend" };
 }
 
 const EXAMPLES = [
@@ -182,6 +182,7 @@ export default function Home() {
               引用合法 {res.check.invalid.length ? `越界 [${res.check.invalid.join(",")}]` : "✓"}
             </span>
             {res.check.noAnswer && <span className={styles.badge}>判定：资料里没有</span>}
+            {res.meta.route === "trend" && <span className={styles.badge}>数值入口 · 算好再答</span>}
             <span className={styles.badge}>{res.meta.model}</span>
           </div>
         </section>

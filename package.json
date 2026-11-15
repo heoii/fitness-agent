@@ -20,7 +20,10 @@
     "w6:latency": "tsx scripts/latency_probe.ts",
     "w6:llm": "tsx scripts/llm_probe.ts",
     "w6:debug": "tsx scripts/query_debug.ts",
-    "w6:ask": "tsx scripts/ask_eval.ts"
+    "w6:ask": "tsx scripts/ask_eval.ts",
+    "w7:trend": "tsx scripts/trend_probe.ts",
+    "w7:scope": "tsx scripts/corpus_scope_probe.ts",
+    "w7:count": "tsx scripts/count_probe.ts"
   },
   "dependencies": {
     "next": "16.4.6",
