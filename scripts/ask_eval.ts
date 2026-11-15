@@ -16,7 +16,7 @@ import { kbDir } from "./kb-dir";
 import { ask, type AskResult } from "../src/lib/answer";
 import { indexMeta } from "../src/lib/retrieve";
 
-type Kind = "answerable" | "absent" | "needs-math" | "reframe";
+type Kind = "answerable" | "absent" | "needs-math" | "reframe" | "aggregate";
 
 interface Q {
   id: string;
@@ -37,6 +37,12 @@ interface Q {
    * 只说「不是一回事」但没答到具体内容，也算没答。
    */
   mustMention?: string[];
+  /**
+   * aggregate 时答案里必须出现的数。
+   * 全部是**人工数语料核过的**（2026-11 共 10 篇训练记录、2026-10 共 26 篇），
+   * 不从工具输出抄——工具算错时判据要能跟着红。
+   */
+  expectNums?: number[];
 }
 
 const QUESTIONS: Q[] = [
@@ -89,6 +95,28 @@ const QUESTIONS: Q[] = [
     // 这条答案只写在 `05 计划与复盘/食材库存.md`，不扩语料到整个知识库就找不到——
     // 它是 KB_DIRS 那条改动的验收题，不是凑数的
     note: "答案在 05 计划与复盘，只索引每日记录时查不到",
+  },
+  // ——— 聚合：没有部位/动作，问的是总量 ———
+  {
+    id: "G1",
+    q: "我平均每周练几次",
+    kind: "aggregate",
+    expectNums: [10],
+    note: "旧版走检索，「10 月平均间隔 1.5 天」换算成「每周 4-5 次」——引用真实、算术也对，答的却是另一个问题",
+  },
+  {
+    id: "G2",
+    q: "和上个月比这个月练得更多吗",
+    kind: "aggregate",
+    expectNums: [10, 26],
+    note: "两个区间的次数：11 月 10 篇、10 月 26 篇（人工 ls 核过）；必须同时给总次数和每周频率",
+  },
+  {
+    id: "G3",
+    q: "上个月练了几次",
+    kind: "aggregate",
+    expectNums: [26],
+    note: "单区间、无实体；旧版因为没有部位/动作直接不走工具",
   },
   { id: "B3", q: "我第一次跑全马的完赛成绩是多少", kind: "absent" },
   { id: "B4", q: "2020 年我的深蹲最大重量是多少", kind: "absent", note: "语料从 2025 年开始" },
@@ -169,6 +197,20 @@ function reframeOk(r: AskResult, mustMention: string[] = []): boolean {
   return corrected && mustMention.every((m) => r.answer.includes(m));
 }
 
+/**
+ * 聚合类：问的是总量（几次 / 每周几次 / 比上月多不多），没有部位或动作。
+ *
+ * 这类题旧版全部掉进检索——因为工具层要求「必须有实体」，
+ * 于是模型从一段文字里抄个数就答了。所以判据要看**路由**：
+ * 走了 count/compare 还不够，数字还得对（真值人工数过语料）。
+ */
+function aggregateOk(r: AskResult, expectNums: number[] = []): boolean {
+  if (!r.ok) return false;
+  if (r.meta.route !== "count" && r.meta.route !== "compare") return false;
+  const got = numbersIn(r.answer);
+  return expectNums.every((n) => got.includes(n));
+}
+
 async function main() {
   kbDir(); // 触发 .env.local 加载（scripts/kb-dir.ts 在模块顶层做）
   // --only C 只跑 id 以 C 开头的题。调参时跑全量要 1 分钟，改一句 prompt 等一分钟太久，
@@ -202,7 +244,18 @@ async function main() {
   // ——— 汇总判据 ———
   const ok = rows.filter((x) => x.r.ok);
   const invalidFree = ok.filter((x) => x.r.check.invalid.length === 0).length;
-  const labelOkN = ok.filter((x) => x.labelOk).length;
+  /*
+   * 引用可定位只对「答案来自资料」的题有意义。
+   *
+   * aggregate（几次 / 每周几次 / 比上月多不多）的答案来自代码——
+   * 「11 月 10 次」是遍历全部训练记录数出来的，不是从某一篇摘的。
+   * 硬给它配两条引用，等于暗示答案出自那两篇，比不给更误导。
+   *
+   * 这不等于「空洞通过」：后者是判据压根没跑却报过（--only=C 那次），
+   * 这里是**明确排除不适用的一类**，而且分母会跟着变小、看得见。
+   */
+  const needsCite = ok.filter((x) => x.q.kind !== "aggregate");
+  const labelOkN = needsCite.filter((x) => x.labelOk).length;
   const answerable = rows.filter((x) => x.q.kind === "answerable" && x.r.ok);
   const citedN = answerable.filter((x) => x.r.check.refs.length > 0 && !x.r.check.noAnswer).length;
   const absent = rows.filter((x) => x.q.kind === "absent" && x.r.ok);
@@ -211,16 +264,19 @@ async function main() {
   const mathN = math.filter((x) => mathOk(x.r, x.q.expectCount)).length;
   const reframe = rows.filter((x) => x.q.kind === "reframe" && x.r.ok);
   const reframeN = reframe.filter((x) => reframeOk(x.r, x.q.mustMention)).length;
+  const agg = rows.filter((x) => x.q.kind === "aggregate" && x.r.ok);
+  const aggN = agg.filter((x) => aggregateOk(x.r, x.q.expectNums)).length;
 
   // 分母为 0 时写「未覆盖」而不是 0/0 然后算通过——--only=C 那次就是这么
   // 显示「✓ A–D 全过」的，实际上 A–D 一条都没跑。空洞通过比失败更危险。
   const frac = (n: number, d: number) => (d === 0 ? "未覆盖" : `${n}/${d}`);
   const A = frac(invalidFree, ok.length);
-  const B = frac(labelOkN, ok.length);
+  const B = frac(labelOkN, needsCite.length);
   const C = frac(citedN, answerable.length);
   const D = frac(absentN, absent.length);
   const E = `${frac(mathN, math.length)}（count 须报对数 / trend 须报双口径 / 否则须拒答）`;
   const F = `${frac(reframeN, reframe.length)}（必须指出「不是一回事」，且答到具体内容）`;
+  const G = `${frac(aggN, agg.length)}（count/compare 路由 + 数字对真值）`;
   const avg = (ok.reduce((s, x) => s + x.r.meta.ms.total, 0) / (ok.length || 1) / 1000).toFixed(1);
 
   console.log("\n" + "=".repeat(78));
@@ -230,14 +286,15 @@ async function main() {
   console.log(`D 库里没有的承认没找到     ${D}`);
   console.log(`E 要算数的走工具而非硬答    ${E}`);
   console.log(`F 前提有误时会纠正          ${F}`);
+  console.log(`G 聚合类走工具且数对        ${G}`);
   console.log(`  平均端到端              ${avg} s（本机 7B，同步非流式）`);
 
   const groupOk = (n: number, d: number) => d === 0 || n === d;
-  const pass = groupOk(invalidFree, ok.length) && groupOk(labelOkN, ok.length) &&
+  const pass = groupOk(invalidFree, ok.length) && groupOk(labelOkN, needsCite.length) &&
     groupOk(citedN, answerable.length) && groupOk(absentN, absent.length) && groupOk(mathN, math.length) &&
-    groupOk(reframeN, reframe.length);
-  const covered = [ok.length > 0, ok.length > 0, answerable.length > 0, absent.length > 0, math.length > 0, reframe.length > 0].filter(Boolean).length;
-  console.log(`\n${pass ? "✓ 全过" : "✗ 有判据未过"}（覆盖 ${covered}/6 组判据）`);
+    groupOk(reframeN, reframe.length) && groupOk(aggN, agg.length);
+  const covered = [ok.length > 0, needsCite.length > 0, answerable.length > 0, absent.length > 0, math.length > 0, reframe.length > 0, agg.length > 0].filter(Boolean).length;
+  console.log(`\n${pass ? "✓ 全过" : "✗ 有判据未过"}（覆盖 ${covered}/7 组判据）`);
 
   /*
    * 分类准确率 + 未达标明细。
@@ -252,10 +309,11 @@ async function main() {
     if (x.q.kind === "answerable") return x.r.check.refs.length > 0 && !x.r.check.noAnswer && x.labelOk;
     if (x.q.kind === "absent") return x.r.check.noAnswer;
     if (x.q.kind === "reframe") return reframeOk(x.r, x.q.mustMention);
+    if (x.q.kind === "aggregate") return aggregateOk(x.r, x.q.expectNums);
     return mathOk(x.r, x.q.expectCount);
   };
   console.log("\n分类准确率");
-  for (const k of ["answerable", "absent", "needs-math", "reframe"] as Kind[]) {
+  for (const k of ["answerable", "absent", "needs-math", "reframe", "aggregate"] as Kind[]) {
     const g = rows.filter((x) => x.q.kind === k);
     if (!g.length) continue;
     const hit = g.filter(good).length;

@@ -13,6 +13,7 @@ import { retrieve, type Hit } from "./retrieve";
 import {
   countTraining,
   latestSession,
+  resolveCompare,
   getExerciseTrend,
   matchExercise,
   entitiesIn,
@@ -64,12 +65,13 @@ export interface AskResult {
     k: number;
     /** 走了哪条入口：retrieve = 语义检索；trend = 数值工具（算好的字段，模型只表述）；
      *  count = 计数工具（遍历全语料数出来的次数）
-     *  latest = 定位工具（遍历全语料取的最晚一条） */
+     *  latest = 定位工具（遍历全语料取的最晚一条）
+     *  compare = 区间对比（两个区间的次数与每周频率，答案全部由代码算出） */
     route: Route;
   };
 }
 
-export type Route = "retrieve" | "trend" | "count" | "latest";
+export type Route = "retrieve" | "trend" | "count" | "latest" | "compare";
 
 /**
  * 「这次问答该怎么答」的决策结果。
@@ -384,7 +386,45 @@ function countRowsBlock(c: CountResult, offset: number): string {
  * 单对象时输出**和加多实体之前一字不差**——19 题验收已经过了那条路，
  * 新功能不该顺手改动已验证的东西。多对象才走下面那个分支。
  */
-function buildCountPrompt(got: CountResult[], offsets: number[], question: string, empties: string[]): string {
+function buildCountPrompt(
+  got: CountResult[],
+  offsets: number[],
+  question: string,
+  empties: string[],
+  wantsRate: boolean
+): string {
+  // ── 全部训练（没有部位/动作）──
+  // 「我练了几次」「平均每周几次」问的是总量，没有双口径可言。
+  // 硬套「重点 / 算上辅助」会输出两个一模一样的数，模型还会把它们说成两件事。
+  if (got.length === 1 && got[0].target === "全部训练") {
+    const c = got[0];
+    const w = c.perWeek;
+    const rate = wantsRate
+      // 用精确天数算，不用 weeks 字段——它是四舍五入过的（15 天 → 2.1 周），
+      // 拿它做除法，10 次会算成每周 4.8，实际是 4.7
+      ? `\n平均频率：${w.count} 次 / ${w.days} 天 = **每周 ${(w.count / (w.days / 7)).toFixed(1)} 次**（分母是已过的 ${w.days} 天，不是整月天数）`
+      : "";
+    return `下面的次数是系统**遍历全部训练记录数出来的**，准确，直接引用。
+
+统计对象：全部训练课（不分部位）
+区间：${c.periodLabel}（${c.from} ~ ${c.to}）
+总课数：${c.withSecondary}${rate}
+命中明细：
+${countRowsBlock(c, offsets[0] - 1)}
+
+口径说明：${c.caliber}
+
+系统结论：${c.summary}
+
+要求：
+1. 直接报上面的数字，**不要自己从明细里重新数**，也不要拿别处的「平均间隔」去换算频率。
+2. 只报一个总数，不要说成某个部位的次数。
+${wantsRate ? `3. 必须报出「每周 X 次」，并说明分母是已过的 ${w.days} 天——不说分母，这个频率没法核对。\n` : ""}4. 必须点明区间（${c.periodLabel}）。
+5. 中文，不超过 100 字。
+
+问题：${question}`;
+  }
+
   if (got.length === 1) {
     const c = got[0];
     return `下面的次数是系统**遍历全部训练记录数出来的**，准确，直接引用。
@@ -576,10 +616,73 @@ ${askAll}
 问题：${question}`;
 }
 
+/* ─────────── 对比入口：这个月比上个月练得更多吗 ─────────── */
+
+/**
+ * 区间对比。
+ *
+ * 这题原来答「资料里没有找到内容」——它需要的是两个区间的课数相减，
+ * 而任何一段文字里都没有这个减法结果。
+ *
+ * **整条答案由代码算出，不过模型。** 对比题的每个字都是模板化的
+ * （两个月各几次、每周几次、差多少），让 7B 复述只会引入新的错法；
+ * 而这里是纯算术，代码不可能算错。
+ *
+ * 关键设计：**同时报总次数和每周频率**。
+ * 11-15 问「本月比上月多吗」，本月才过 15 天、10 次；上月整月 26 次。
+ * 只看总次数会说「少了很多」，但按每周频率算才公平——月份长短不一样。
+ * 这和容量那个「含热身 / 剔除热身」是同一个道理：一个数有两种读法，都得给。
+ */
+function planCompare(question: string): Plan | null {
+  const pair = resolveCompare(question);
+  if (!pair) return null;
+
+  let cur: CountResult;
+  let prev: CountResult;
+  try {
+    cur = countTraining({ period: pair.cur });
+    prev = countTraining({ period: pair.prev });
+  } catch {
+    return null;
+  }
+  // 有一边完全没有记录就交给别的入口：只报一个月的数不叫对比
+  if (!cur.ok || !prev.ok) return null;
+
+  const rateOf = (c: CountResult) => c.perWeek.count / (c.perWeek.days / 7);
+  const rc = rateOf(cur);
+  const rp = rateOf(prev);
+  const delta = rp > 0 ? ((rc - rp) / rp) * 100 : 0;
+  const dir = Math.abs(delta) < 5 ? "持平" : delta > 0 ? "更多" : "更少";
+  const pct = `${delta > 0 ? "+" : ""}${delta.toFixed(0)}%`;
+
+  const line = (c: CountResult, r: number) =>
+    `${c.periodLabel}（${c.from} ~ ${c.to}，已过 ${c.perWeek.days} 天）：${c.perWeek.count} 次，每周 ${r.toFixed(1)} 次`;
+
+  const answer =
+    `${line(cur, rc)}\n${line(prev, rp)}\n` +
+    `按每周频率比：${pct}（${rc.toFixed(1)} vs ${rp.toFixed(1)} 次/周），${pair.unit === "周" ? "这周" : "这个月"}练得${dir}。\n` +
+    `注：只比次数，不比训练量——容量跨动作不可相加。` +
+    (cur.perWeek.days < 25 ? `当前区间还没过完（已过 ${cur.perWeek.days} 天），所以总次数那一行要配合频率看。` : "");
+
+  return {
+    route: "compare",
+    citations: [],
+    k: 0,
+    prompt: null,
+    fixedAnswer: answer,
+    retrieveMs: 0,
+    numPredict: 0,
+  };
+}
+
 function planCount(question: string): Plan | null {
   if (!COUNT_INTENT.test(question)) return null;
   const ents = entitiesIn(question);
-  if (!ents.length) return null;
+  // 认不出对象也能数：「我练了几次」「平均每周几次」问的是全部训练。
+  // 旧实现直接 return null，这两道题就掉进检索，模型从一段文字里抄了个数就答了——
+  // 问「平均每周练几次」它答「10 月平均间隔 1.5 天，所以每周 4-5 次」，
+  // 引用是真的、算术也对，答的却是十月的事。
+  const wantsRate = /平均|每周|一周|频率|多久一次/.test(question);
 
   const period = resolvePeriod(question);
   const got: CountResult[] = [];
@@ -593,6 +696,16 @@ function planCount(question: string): Plan | null {
       else empties.push(`${c.periodLabel} 没有以「${ent.name}」为参与部位的训练记录`);
     } catch {
       empties.push(`${ent.name} 查询失败`);
+    }
+  }
+
+  if (!ents.length) {
+    try {
+      const c = countTraining({ period });
+      if (c.ok) got.push(c);
+      else empties.push(`${c.periodLabel} 没有训练记录`);
+    } catch {
+      empties.push("统计失败");
     }
   }
 
@@ -624,7 +737,7 @@ function planCount(question: string): Plan | null {
     route: "count",
     citations: cites,
     k: Math.max(1, cites.length),
-    prompt: buildCountPrompt(got, offsets, question, empties),
+    prompt: buildCountPrompt(got, offsets, question, empties, wantsRate),
     retrieveMs: 0,
     numPredict: got.length > 1 ? 260 : 180,
   };
@@ -708,6 +821,10 @@ function planRetrieve(question: string, k: number): { ok: true; plan: Plan } | {
  */
 export function pick(question: string, k: number, noTools?: boolean): Plan | { error: string } {
   if (!noTools) {
+    // 对比先于计数：「这个月比上个月练了几次」同时含「几次」，
+    // 先判计数会只数本月，用户要的对比就没了
+    const cmp = planCompare(question);
+    if (cmp) return cmp;
     const c = planCount(question);
     if (c) return c;
     // 定位先于趋势：「上次深蹲是什么时候」不含涨跌词，但若哪天含了就归定位——

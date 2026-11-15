@@ -457,6 +457,17 @@ export interface CountResult {
   withSecondary: number;
   /** 其中降级课（试探档/复训）几次 */
   degradedCount: number;
+  /**
+   * 「平均每周几次」需要的比值。
+   *
+   * 为什么不交给模型算：它会把「10 月平均间隔 1.5 天」换算成「每周 4-5 次」，
+   * 而那是 10 月的数据，用它回答「我平均每周练几次」——引用真实、算术也对、
+   * 结论答的是另一个问题。这类错比算错更难发现。
+   *
+   * **区间还没过完时按已过天数算**：11-15 问「本月平均每周几次」，
+   * 用整月 30 天会把未来 15 天也算进分母，频率直接砍半。
+   */
+  perWeek: { count: number; weeks: number; days: number };
   caliber: string;
   summary: string;
   reason?: string;
@@ -747,6 +758,47 @@ export function latestSession(
 }
 
 /**
+ * 「这个月比上个月练得更多吗」需要**两个**区间，而 `resolvePeriod` 只给一个。
+ *
+ * 单独一个函数，而不是让调用方拼两次：月初/月末边界算错一次，整张对比表就全错，
+ * 而且**看起来完全正常**——9 月有 30 天、10 月有 31 天，差一天不会有人察觉，
+ * 但「每周几次」会差 3%。
+ */
+export function resolveCompare(
+  q: string,
+  ref = new Date()
+): { cur: Period; prev: Period; unit: "月" | "周" } | null {
+  const day = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate());
+
+  // 只有「比 / 对比 / 多还是少」才算比较；单说「上个月练了几次」是单区间查询
+  if (!/比|对比|多还是少|哪个更多|哪个多/.test(q)) return null;
+
+  const monthOf = (offset: number): Period => {
+    const first = new Date(day.getFullYear(), day.getMonth() + offset, 1);
+    const last = new Date(day.getFullYear(), day.getMonth() + offset + 1, 0);
+    return {
+      label: `${first.getFullYear()} 年 ${first.getMonth() + 1} 月`,
+      from: ymd(first),
+      to: ymd(last),
+    };
+  };
+
+  const weekOf = (offset: number): Period => {
+    // 周一为一周之首：中国习惯，而且训练日志本来就是按周排课的
+    const dow = (day.getDay() + 6) % 7;
+    const start = new Date(day);
+    start.setDate(day.getDate() - dow + offset * 7);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    return { label: `${start.getMonth() + 1} 月 ${start.getDate()} 日那周`, from: ymd(start), to: ymd(end) };
+  };
+
+  if (/周|星期/.test(q)) return { cur: weekOf(0), prev: weekOf(-1), unit: "周" };
+  if (/月/.test(q)) return { cur: monthOf(0), prev: monthOf(-1), unit: "月" };
+  return null;
+}
+
+/**
  * 数区间内的训练节数。
  *
  * 双口径是必须的，理由和趋势那边一样：`muscle_focus` 只记重点部位，
@@ -759,7 +811,10 @@ export function countTraining(
   opts: { refDate?: Date } = {}
 ): CountResult {
   const { muscle = null, exercise = null, period } = args;
-  const target = muscle ?? exercise ?? "";
+  // 三个都不传 = 数**全部训练课**。问「我练了几次」「平均每周几次」时没有部位/动作，
+  // 旧实现直接返回 null，于是这类题掉进检索、模型从一段文字里抄个数就答了。
+  const all = !muscle && !exercise;
+  const target = muscle ?? exercise ?? "全部训练";
   const empty = (reason: string): CountResult => ({
     ok: false,
     target,
@@ -770,6 +825,7 @@ export function countTraining(
     focusCount: 0,
     withSecondary: 0,
     degradedCount: 0,
+    perWeek: { count: 0, weeks: 0, days: 0 },
     caliber: "",
     summary: "",
     reason,
@@ -789,11 +845,13 @@ export function countTraining(
       const focusParts = rec ? rec.muscleFocus : fmList(doc, "muscle_focus");
       const groupParts = rec ? rec.muscleGroups : fmList(doc, "muscle_groups");
       const names = rec ? rec.exercises.map((x) => x.name) : [];
-      // 命中判定：按部位走 frontmatter 词表；按动作走动作名包含
-      const focus = muscle
-        ? focusParts.includes(muscle)
-        : names.some((n) => n.includes(exercise as string));
-      const secondary = muscle ? groupParts.includes(muscle) : focus;
+      // 命中判定：按部位走 frontmatter 词表；按动作走动作名包含；都没有就全算
+      const focus = all
+        ? true
+        : muscle
+          ? focusParts.includes(muscle)
+          : names.some((n) => n.includes(exercise as string));
+      const secondary = all ? true : muscle ? groupParts.includes(muscle) : focus;
       return {
         row: {
           date,
@@ -814,28 +872,41 @@ export function countTraining(
     .map((x) => x.row);
 
   if (!rows.length)
-    return empty(`${period.label}没有${muscle ? `以「${muscle}」为参与部位` : `含「${exercise}」`}的训练记录`);
+    return empty(
+      `${period.label}没有${all ? "训练" : muscle ? `以「${muscle}」为参与部位` : `含「${exercise}」`}记录`
+    );
 
   const focusRows = rows.filter((r) => r.focus);
   const degradedCount = rows.filter((r) => r.degraded).length;
   const dates = (rs: SessionRow[]) => rs.map((r) => r.date.slice(5)).join("、");
 
-  const caliber = muscle
-    ? `一次 = 一篇训练记录（练练导入的一节课）。` +
-      `「重点 ${focusRows.length} 次」只数 frontmatter 的 muscle_focus（这节课主要练的部位）；` +
-      `「含兼带 ${rows.length} 次」用 muscle_groups（重点+辅助的并集）——蹲腿日里臀是辅助，只算 focus 会漏。`
-    : `一次 = 一篇训练记录，动作名包含「${exercise}」即计入。`;
+  const caliber = all
+    ? `一次 = 一篇训练记录（练练导入的一节课），不分部位。`
+    : muscle
+      ? `一次 = 一篇训练记录（练练导入的一节课）。` +
+        `「重点 ${focusRows.length} 次」只数 frontmatter 的 muscle_focus（这节课主要练的部位）；` +
+        `「含兼带 ${rows.length} 次」用 muscle_groups（重点+辅助的并集）——蹲腿日里臀是辅助，只算 focus 会漏。`
+      : `一次 = 一篇训练记录，动作名包含「${exercise}」即计入。`;
 
   const summary =
-    (muscle
-      ? `${period.label}（${period.from} ~ ${period.to}）以「${muscle}」为重点的课 ${focusRows.length} 次` +
-        `${focusRows.length ? `（${dates(focusRows)}）` : ""}；` +
-        `把「${muscle}」作为辅助部位也算上，共 ${rows.length} 次` +
-        `${rows.length > focusRows.length ? `（另含 ${dates(rows.filter((r) => !r.focus))}）` : ""}。`
-      : `${period.label}（${period.from} ~ ${period.to}）含「${exercise}」的课 ${rows.length} 次（${dates(rows)}）。`) +
+    (all
+      ? `${period.label}（${period.from} ~ ${period.to}）共 ${rows.length} 节课。`
+      : muscle
+        ? `${period.label}（${period.from} ~ ${period.to}）以「${muscle}」为重点的课 ${focusRows.length} 次` +
+          `${focusRows.length ? `（${dates(focusRows)}）` : ""}；` +
+          `把「${muscle}」作为辅助部位也算上，共 ${rows.length} 次` +
+          `${rows.length > focusRows.length ? `（另含 ${dates(rows.filter((r) => !r.focus))}）` : ""}。`
+        : `${period.label}（${period.from} ~ ${period.to}）含「${exercise}」的课 ${rows.length} 次（${dates(rows)}）。`) +
     (degradedCount ? `其中 ${degradedCount} 次是降级课（试探档/复训），按课时也属于练了。` : "") +
     `\n这个数是遍历全部训练记录数出来的，不是从检索到的几段里数的——那些片段只是最相关的几条，不是全集。` +
     `计划里写了但被取消的课不会出现在训练记录里，所以不计入；反过来，记录里没有的也不能当成没练。`;
+
+  // 频率：分母用**已过天数**，不是区间总天数。11-15 问「本月平均每周几次」，
+  // 拿 30 天当分母等于把还没到的半个月算成「没练」，频率直接砍半。
+  const ref = opts.refDate ?? new Date();
+  const endMs = Math.min(Date.parse(period.to), ref.getTime());
+  const days = Math.max(1, Math.round((endMs - Date.parse(period.from)) / 86_400_000) + 1);
+  const perWeek = { count: rows.length, weeks: Math.round((days / 7) * 10) / 10, days };
 
   return {
     ok: true,
@@ -847,6 +918,7 @@ export function countTraining(
     focusCount: focusRows.length,
     withSecondary: rows.length,
     degradedCount,
+    perWeek,
     caliber,
     summary,
   };
