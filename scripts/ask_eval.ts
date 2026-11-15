@@ -16,7 +16,7 @@ import { kbDir } from "./kb-dir";
 import { ask, type AskResult } from "../src/lib/answer";
 import { indexMeta } from "../src/lib/retrieve";
 
-type Kind = "answerable" | "absent" | "needs-math";
+type Kind = "answerable" | "absent" | "needs-math" | "reframe";
 
 interface Q {
   id: string;
@@ -31,11 +31,26 @@ interface Q {
    * 不许从工具输出里抄——否则工具算错，判据跟着一起错，等于没判。
    */
   expectCount?: number;
+  /**
+   * reframe 时，答案里必须出现的词。
+   * 这些是**资料里的关键区分点**（比如「恢复是 2–4 周的被动中断」），
+   * 只说「不是一回事」但没答到具体内容，也算没答。
+   */
+  mustMention?: string[];
 }
 
 const QUESTIONS: Q[] = [
   { id: "A1", q: "为什么我练胸的时候脖子会酸？", kind: "answerable", expectDoc: "2026-11-02-健康记录" },
-  { id: "A2", q: "减载期、恢复期、增长期的门槛分别是什么", kind: "answerable" },
+  {
+    id: "A2",
+    q: "减载期、恢复期、增长期的门槛分别是什么",
+    kind: "reframe",
+    mustMention: ["恢复"],
+    // 问题把两套分类混着问：减载/增长是 ACWR 的三个区间，而「恢复」是另一套
+    // （被动、被外力打断、2–4 周）。2026-10-31 那篇里有一整节叫
+    // 「最容易混的一对：减载 ≠ 恢复」。模型原来顺着错的框架答，还把恢复期跳过了。
+    note: "前提混淆：减载/增长是 ACWR 区间，恢复是另一套划分",
+  },
   { id: "A3", q: "苹果健康数据多久导入一次", kind: "answerable" },
   { id: "A4", q: "卧推用 8×8 还是 5×5 怎么看", kind: "answerable", expectDoc: "2026-10-31-健康记录" },
   { id: "A5", q: "自由泳高肘抱水怎么练", kind: "answerable" },
@@ -135,6 +150,25 @@ function mathOk(r: AskResult, expectCount?: number): boolean {
   return isRefusal(r.answer);
 }
 
+/**
+ * 「问题前提有误」类：正确行为是**先纠正前提，再回答**。
+ *
+ * A2 原来只答了减载区和增长区，「恢复期」被跳过——因为用户把两套分类混着问：
+ * 减载/增长是 ACWR 的三个区间，而「恢复」是另一套（被动、被外力打断、2–4 周）。
+ * 模型顺着错的框架答、还漏了一个，看起来却像个完整回答。
+ *
+ * 判据只认「有没有指出这不是一回事」，不判措辞是否漂亮——那太脆。
+ * 但 mustMention 是硬的：光说「不是一回事」却不讲恢复是什么，等于没回答。
+ */
+function reframeOk(r: AskResult, mustMention: string[] = []): boolean {
+  if (!r.ok) return false;
+  const corrected =
+    /不是一回事|不是同一|不属于|另一套|两种划分|不同的划分|不在同一|不是这么分|不是同一个层面|要分开看/.test(
+      r.answer
+    );
+  return corrected && mustMention.every((m) => r.answer.includes(m));
+}
+
 async function main() {
   kbDir(); // 触发 .env.local 加载（scripts/kb-dir.ts 在模块顶层做）
   // --only C 只跑 id 以 C 开头的题。调参时跑全量要 1 分钟，改一句 prompt 等一分钟太久，
@@ -175,6 +209,8 @@ async function main() {
   const absentN = absent.filter((x) => x.r.check.noAnswer).length;
   const math = rows.filter((x) => x.q.kind === "needs-math" && x.r.ok);
   const mathN = math.filter((x) => mathOk(x.r, x.q.expectCount)).length;
+  const reframe = rows.filter((x) => x.q.kind === "reframe" && x.r.ok);
+  const reframeN = reframe.filter((x) => reframeOk(x.r, x.q.mustMention)).length;
 
   // 分母为 0 时写「未覆盖」而不是 0/0 然后算通过——--only=C 那次就是这么
   // 显示「✓ A–D 全过」的，实际上 A–D 一条都没跑。空洞通过比失败更危险。
@@ -184,6 +220,7 @@ async function main() {
   const C = frac(citedN, answerable.length);
   const D = frac(absentN, absent.length);
   const E = `${frac(mathN, math.length)}（count 须报对数 / trend 须报双口径 / 否则须拒答）`;
+  const F = `${frac(reframeN, reframe.length)}（必须指出「不是一回事」，且答到具体内容）`;
   const avg = (ok.reduce((s, x) => s + x.r.meta.ms.total, 0) / (ok.length || 1) / 1000).toFixed(1);
 
   console.log("\n" + "=".repeat(78));
@@ -192,13 +229,15 @@ async function main() {
   console.log(`C 有答案的题真的引用了     ${C}`);
   console.log(`D 库里没有的承认没找到     ${D}`);
   console.log(`E 要算数的走工具而非硬答    ${E}`);
+  console.log(`F 前提有误时会纠正          ${F}`);
   console.log(`  平均端到端              ${avg} s（本机 7B，同步非流式）`);
 
   const groupOk = (n: number, d: number) => d === 0 || n === d;
   const pass = groupOk(invalidFree, ok.length) && groupOk(labelOkN, ok.length) &&
-    groupOk(citedN, answerable.length) && groupOk(absentN, absent.length) && groupOk(mathN, math.length);
-  const covered = [ok.length > 0, ok.length > 0, answerable.length > 0, absent.length > 0, math.length > 0].filter(Boolean).length;
-  console.log(`\n${pass ? "✓ 全过" : "✗ 有判据未过"}（覆盖 ${covered}/5 组判据）`);
+    groupOk(citedN, answerable.length) && groupOk(absentN, absent.length) && groupOk(mathN, math.length) &&
+    groupOk(reframeN, reframe.length);
+  const covered = [ok.length > 0, ok.length > 0, answerable.length > 0, absent.length > 0, math.length > 0, reframe.length > 0].filter(Boolean).length;
+  console.log(`\n${pass ? "✓ 全过" : "✗ 有判据未过"}（覆盖 ${covered}/6 组判据）`);
 
   /*
    * 分类准确率 + 未达标明细。
@@ -212,10 +251,11 @@ async function main() {
     if (!x.r.ok) return false;
     if (x.q.kind === "answerable") return x.r.check.refs.length > 0 && !x.r.check.noAnswer && x.labelOk;
     if (x.q.kind === "absent") return x.r.check.noAnswer;
+    if (x.q.kind === "reframe") return reframeOk(x.r, x.q.mustMention);
     return mathOk(x.r, x.q.expectCount);
   };
   console.log("\n分类准确率");
-  for (const k of ["answerable", "absent", "needs-math"] as Kind[]) {
+  for (const k of ["answerable", "absent", "needs-math", "reframe"] as Kind[]) {
     const g = rows.filter((x) => x.q.kind === k);
     if (!g.length) continue;
     const hit = g.filter(good).length;
