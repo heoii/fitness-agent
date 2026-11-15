@@ -112,6 +112,25 @@ function kbDirs(): string[] {
   return [dir];
 }
 
+/**
+ * 语料类别排除（2026-11-15，先试降权后改硬排除）。
+ *
+ * 实测出的污染：把「检索答错不能怪模型」这类**分析自己系统**的笔记写进知识库后，
+ * 问「练胸为什么脖子酸」的 top1 变成了那篇笔记（最终分 23.57 vs 真实记录 14.8）。
+ * 原因是它整篇都在讨论「练胸/脖子/酸」，BM25 原始分直接 3 倍于 11-02 那一节。
+ *
+ * 先试过 `03 知识笔记` 整体 ×0.45 降权 —— 压不住：元讨论的词频没有上限，
+ * 今天 50 分、明天写长一点就 80 分，系数永远追不上。**猜系数是在赌，排除才是判。**
+ * 所以 `03 知识笔记/学习/`（agent 学习案例、方法论）直接不进候选池。
+ *
+ * 注意排除的粒度是「学习」子目录而不是整个 03：`03 知识笔记/健康/` 里是真健康知识，
+ * 该被检索；「学习」里是「我在分析这个系统」——那不是记录，是关于记录的讨论。
+ */
+function pathFactor(p: string): number {
+  if (p.includes("03 知识笔记/学习")) return 0;
+  return 1;
+}
+
 function build(): Built {
   const t0 = performance.now();
   const dirs = kbDirs();
@@ -262,13 +281,17 @@ export function retrieve(query: string, opts: RetrieveOptions = {}): Hit[] {
     const rec = recencyFactor(chunk.doc.date ?? "", strong, now);
     // 相关性排第一，时间做加权而不是独占：0.45 权重 + 0.55 保底，
     // 保证「文本完全不相关的近期文档」不会挤掉「文本高度相关的老文档」。
-    const score = c.score * (1 - RECENCY_WEIGHT + RECENCY_WEIGHT * rec);
+    const score =
+      c.score * (1 - RECENCY_WEIGHT + RECENCY_WEIGHT * rec) * pathFactor(chunk.doc.path);
     return { chunk, bm25: c.score, rec, score };
   });
 
   scored.sort((a, b) => b.score - a.score);
+  // pathFactor=0 的（学习案例等元讨论）在这里出局；
+  // pool 默认 50，即便过滤掉一批也够填满 k
+  const alive = scored.filter((s) => s.score > 0);
 
-  return scored.slice(0, k).map((s, i) => ({
+  return alive.slice(0, k).map((s, i) => ({
     n: i + 1,
     doc: s.chunk.doc.name,
     docPath: s.chunk.doc.path,
