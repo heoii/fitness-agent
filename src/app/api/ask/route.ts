@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ask, ASK_K } from "@/lib/answer";
+import { ask, askStream, ASK_K } from "@/lib/answer";
 import { indexMeta } from "@/lib/retrieve";
 
 /**
@@ -51,8 +51,57 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, reason: "q 为空" }, { status: 200 });
   }
 
+  // ?stream=1 → SSE。不复用同一个响应体：同步返回一个完整 JSON，
+  // 流式返回一串事件，硬塞进一个形状里会让两边都难用。
+  if (new URL(req.url).searchParams.get("stream") === "1") return sseStream(q.trim(), k, req.signal);
+
   const result = await ask(q.trim(), { k });
   return NextResponse.json(result);
+}
+
+/**
+ * 流式响应（W7·5）。
+ *
+ * 三件事必须做对，否则页面看起来「有流式」但体验是错的：
+ *   ① `cites` 事件先发 —— 检索 14 ms，生成 2–8 s，先给来源比先给字有用；
+ *   ② 客户端断开时 `req.signal` 会 abort，一直传到 Ollama 的 fetch，
+ *      **模型那边也停**。不传的话用户关了页面，模型还在跑完 260 个 token；
+ *   ③ 每个事件一行 `data: {...}\n\n`，前端按空行切分，不要自己发明分隔符。
+ */
+function sseStream(q: string, k: number, signal: AbortSignal): Response {
+  const enc = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const send = (o: unknown) => {
+        try {
+          controller.enqueue(enc.encode(`data: ${JSON.stringify(o)}\n\n`));
+        } catch {
+          /* 客户端已断开，controller 关了，后续 token 直接丢 */
+        }
+      };
+      try {
+        for await (const ev of askStream(q, { k, signal })) send(ev);
+      } catch (e) {
+        send({ type: "error", reason: e instanceof Error ? e.message : "生成失败" });
+      } finally {
+        try {
+          controller.close();
+        } catch {
+          /* 已经关了 */
+        }
+      }
+    },
+  });
+
+  return new Response(body, {
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      // 有反向代理时必须关缓冲，否则攒满一块才吐，流式就白做了
+      "X-Accel-Buffering": "no",
+    },
+  });
 }
 
 /** 问答是同步阻塞的（本机 7B 约 5–10 s），给足超时 */

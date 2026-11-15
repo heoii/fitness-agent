@@ -60,8 +60,29 @@ export interface AskResult {
     k: number;
     /** 走了哪条入口：retrieve = 语义检索；trend = 数值工具（算好的字段，模型只表述）；
      *  count = 计数工具（遍历全语料数出来的次数） */
-    route: "retrieve" | "trend" | "count";
+    route: Route;
   };
+}
+
+export type Route = "retrieve" | "trend" | "count";
+
+/**
+ * 「这次问答该怎么答」的决策结果。
+ *
+ * 拆出这一层是为了让**同步（脚本评测）和流式（页面）共用同一份路由逻辑**。
+ * 上一版把路由写在 `tryTrend/tryCount` 里、生成紧跟着发生，于是流式要么复制一遍
+ * 判断（两份必然漂移），要么把流式硬塞进同步函数。路由和生成是两件事，分开。
+ */
+interface Plan {
+  route: Route;
+  citations: Citation[];
+  /** 引用条数上界，`checkAnswer` 用它判越界 */
+  k: number;
+  /** null = 不需要模型（结果已经确定，比如区间内一条记录都没有） */
+  prompt: string | null;
+  fixedAnswer?: string;
+  retrieveMs: number;
+  numPredict: number;
 }
 
 export function buildAskPrompt(hits: Hit[], question: string): string {
@@ -159,7 +180,10 @@ export function checkAnswer(answer: string, k: number): CitationCheck {
     refs,
     invalid: refs.filter((n) => n < 1 || n > k),
     unused: all.filter((n) => !refs.includes(n)),
-    noAnswer: /没有找到|没找到|无相关|资料中没有/.test(answer),
+    // 「没有…记录」也要算：计数入口的空结果说的是「没有以「腿」为参与部位的训练记录」，
+    // 语义上就是没找到，但第一版正则只认「没有找到」，于是这个 badge 不亮——
+    // 判定漏了比判定错了更难发现，因为界面上什么都不显示。
+    noAnswer: /没有找到|没找到|无相关|资料中没有|没有.{0,30}记录/.test(answer),
   };
 }
 
@@ -208,9 +232,10 @@ function trendCitations(t: TrendResult): Citation[] {
  * 这里用**预取式**而不是让模型自己决定调哪个工具——理由是控制权：
  * 是否走这条路先由规则判定，模型只负责把算好的字段说成人话。
  * 真正的「模型自己决定再查一次」留到控制循环（M3），那是另一层能力。
- * 工具失败就返回 null，让检索兜底，宁可退化也不要在这条路上硬答。
+ * 工具给不出结论（比如自重/负重混在一起、正常档不足 3 次）就返回 null，
+ * 让检索兜底，宁可退化也不要在这条路上硬答。
  */
-async function tryTrend(question: string, t0: number): Promise<AskResult | null> {
+function planTrend(question: string): Plan | null {
   if (!TREND_INTENT.test(question)) return null;
   const name = matchExercise(question);
   if (!name) return null;
@@ -223,27 +248,14 @@ async function tryTrend(question: string, t0: number): Promise<AskResult | null>
   }
   if (!trend.ok) return null;
 
-  const tG = Date.now();
-  let answer: string;
-  try {
-    answer = await generateOnce(buildTrendPrompt(trend, question), 200);
-  } catch {
-    return null;
-  }
-
   const cites = trendCitations(trend);
-  const k = Math.max(1, cites.length);
   return {
-    ok: true,
-    answer,
+    route: "trend",
     citations: cites,
-    check: checkAnswer(answer, k),
-    meta: {
-      model: OLLAMA_MODEL,
-      ms: { retrieve: 0, generate: Date.now() - tG, total: Date.now() - t0 },
-      k,
-      route: "trend",
-    },
+    k: Math.max(1, cites.length),
+    prompt: buildTrendPrompt(trend, question),
+    retrieveMs: 0,
+    numPredict: 200,
   };
 }
 
@@ -302,7 +314,7 @@ ${rows}
  * 让 7B 去复述一个空结果，它有一定概率自己补一个数字出来，
  * 而这里根本没有需要润色的内容。
  */
-async function tryCount(question: string, t0: number): Promise<AskResult | null> {
+function planCount(question: string): Plan | null {
   if (!COUNT_INTENT.test(question)) return null;
   const muscle = resolveMuscle(question);
   const exercise = muscle ? null : matchExercise(question);
@@ -316,45 +328,29 @@ async function tryCount(question: string, t0: number): Promise<AskResult | null>
     return null;
   }
 
-  const emptyCheck = { refs: [] as number[], invalid: [] as number[], unused: [] as number[], noAnswer: true };
   if (!c.ok) {
     // 空结果直接给，不过模型：这里是事实陈述，没有可润色的空间
     return {
-      ok: true,
-      answer: `${c.periodLabel}（${c.from} ~ ${c.to}）没有以「${c.target}」为参与部位的训练记录。` +
-        `如果这个统计口径不对（比如你想问的是别的部位），告诉我具体名字我再数。`,
+      route: "count",
       citations: [],
-      check: emptyCheck,
-      meta: {
-        model: OLLAMA_MODEL,
-        ms: { retrieve: 0, generate: 0, total: Date.now() - t0 },
-        k: 0,
-        route: "count",
-      },
+      k: 0,
+      prompt: null,
+      fixedAnswer:
+        `${c.periodLabel}（${c.from} ~ ${c.to}）没有以「${c.target}」为参与部位的训练记录。` +
+        `如果这个统计口径不对（比如你想问的是别的部位），告诉我具体名字我再数。`,
+      retrieveMs: 0,
+      numPredict: 0,
     };
   }
 
   const cites = countCitations(c);
-  const tG = Date.now();
-  let answer: string;
-  try {
-    answer = await generateOnce(buildCountPrompt(c, question), 180);
-  } catch {
-    // 模型挂了就直接用工具的话说——数字是算好的，不依赖模型
-    answer = c.summary.split("\n")[0];
-  }
-
   return {
-    ok: true,
-    answer,
+    route: "count",
     citations: cites,
-    check: checkAnswer(answer, Math.max(1, cites.length)),
-    meta: {
-      model: OLLAMA_MODEL,
-      ms: { retrieve: 0, generate: Date.now() - tG, total: Date.now() - t0 },
-      k: Math.max(1, cites.length),
-      route: "count",
-    },
+    k: Math.max(1, cites.length),
+    prompt: buildCountPrompt(c, question),
+    retrieveMs: 0,
+    numPredict: 180,
   };
 }
 
@@ -385,71 +381,279 @@ function toCitation(h: Hit, snippetChars = 180): Citation {
   };
 }
 
+/** 检索入口。失败返回原因而不是抛，调用方统一处理。 */
+function planRetrieve(question: string, k: number): { ok: true; plan: Plan } | { ok: false; reason: string } {
+  const tR = Date.now();
+  let hits: Hit[];
+  try {
+    hits = retrieve(question, { k });
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : "检索失败" };
+  }
+  const retrieveMs = Date.now() - tR;
+
+  if (!hits.length)
+    return {
+      ok: true,
+      plan: {
+        route: "retrieve",
+        citations: [],
+        k,
+        prompt: null,
+        fixedAnswer: "资料里没有找到相关内容。",
+        retrieveMs,
+        numPredict: 0,
+      },
+    };
+
+  return {
+    ok: true,
+    plan: {
+      route: "retrieve",
+      citations: hits.map((h) => toCitation(h)),
+      k: hits.length,
+      prompt: buildAskPrompt(hits, question),
+      retrieveMs,
+      numPredict: ASK_NUM_PREDICT,
+    },
+  };
+}
+
+/**
+ * 路由决策，**同步与流式共用这一份**。
+ *
+ * 顺序有讲究：计数先于趋势——「练了几次深蹲」同时含动作名，但问的是总数不是变化，
+ * 先判趋势会被 8 次记录的空趋势干扰。两条数值入口都判不上，才走检索。
+ *
+ * `noTools` 只在一处用：数值入口生成失败时回落到检索，避免来回递归。
+ */
+function pick(question: string, k: number, noTools?: boolean): Plan | { error: string } {
+  if (!noTools) {
+    const c = planCount(question);
+    if (c) return c;
+    const t = planTrend(question);
+    if (t) return t;
+  }
+  const r = planRetrieve(question, k);
+  return r.ok ? r.plan : { error: r.reason };
+}
+
 /**
  * 一次完整的问答：检索 → 组装 → 生成 → 校验。
  * 不抛异常，失败也返回结构化结果（和 /api/extract 的「永不 500」保持一致）。
  */
-export async function ask(question: string, opts: { k?: number } = {}): Promise<AskResult> {
+export async function ask(
+  question: string,
+  opts: { k?: number; noTools?: boolean } = {}
+): Promise<AskResult> {
   const k = opts.k ?? ASK_K;
   const t0 = Date.now();
 
-  // 数值入口优先：这类题的答案不在任何一段文字里，检索给不了，模型也算不准。
-  // 计数先判——「练了几次深蹲」同时含动作名，但问的是总数不是趋势。
-  const viaCount = await tryCount(question, t0);
-  if (viaCount) return viaCount;
-
-  const viaTool = await tryTrend(question, t0);
-  if (viaTool) return viaTool;
-
-  let hits: Hit[];
-  const tR = Date.now();
-  try {
-    hits = retrieve(question, { k });
-  } catch (e) {
+  const picked = pick(question, k, opts.noTools);
+  if ("error" in picked) {
     return {
       ok: false,
       answer: "",
       citations: [],
       check: { refs: [], invalid: [], unused: [], noAnswer: false },
-      reason: e instanceof Error ? e.message : "检索失败",
+      reason: picked.error,
       meta: { model: OLLAMA_MODEL, ms: { retrieve: 0, generate: 0, total: Date.now() - t0 }, k, route: "retrieve" },
     };
   }
-  const retrieveMs = Date.now() - tR;
+  const plan = picked;
 
-  if (!hits.length) {
+  if (plan.prompt === null) {
+    const answer = plan.fixedAnswer ?? "";
     return {
       ok: true,
-      answer: "资料里没有找到相关内容。",
-      citations: [],
-      check: { refs: [], invalid: [], unused: [], noAnswer: true },
-      meta: { model: OLLAMA_MODEL, ms: { retrieve: retrieveMs, generate: 0, total: Date.now() - t0 }, k, route: "retrieve" },
+      answer,
+      citations: plan.citations,
+      check: checkAnswer(answer, plan.k),
+      meta: {
+        model: OLLAMA_MODEL,
+        ms: { retrieve: plan.retrieveMs, generate: 0, total: Date.now() - t0 },
+        k: plan.k,
+        route: plan.route,
+      },
     };
   }
 
   const tG = Date.now();
   let answer: string;
   try {
-    answer = await generateOnce(buildAskPrompt(hits, question));
+    answer = await generateOnce(plan.prompt, plan.numPredict);
   } catch (e) {
+    // 数值入口生成失败就退化到检索：宁可答得保守，也不要在这条路上给半个数
+    if (plan.route !== "retrieve") return ask(question, { k, noTools: true });
     const msg =
       e instanceof Error && e.name === "AbortError" ? "模型推理超时" : e instanceof Error ? e.message : "生成失败";
     return {
       ok: false,
       answer: "",
-      citations: hits.map((h) => toCitation(h)),
-      check: { refs: [], invalid: [], unused: hits.map((h) => h.n), noAnswer: false },
+      citations: plan.citations,
+      check: { refs: [], invalid: [], unused: plan.citations.map((c) => c.n), noAnswer: false },
       reason: msg,
-      meta: { model: OLLAMA_MODEL, ms: { retrieve: retrieveMs, generate: Date.now() - tG, total: Date.now() - t0 }, k, route: "retrieve" },
+      meta: {
+        model: OLLAMA_MODEL,
+        ms: { retrieve: plan.retrieveMs, generate: Date.now() - tG, total: Date.now() - t0 },
+        k,
+        route: "retrieve",
+      },
     };
   }
-  const generateMs = Date.now() - tG;
 
   return {
     ok: true,
     answer,
-    citations: hits.map((h) => toCitation(h)),
-    check: checkAnswer(answer, hits.length),
-    meta: { model: OLLAMA_MODEL, ms: { retrieve: retrieveMs, generate: generateMs, total: Date.now() - t0 }, k, route: "retrieve" },
+    citations: plan.citations,
+    check: checkAnswer(answer, plan.k),
+    meta: {
+      model: OLLAMA_MODEL,
+      ms: { retrieve: plan.retrieveMs, generate: Date.now() - tG, total: Date.now() - t0 },
+      k: plan.k,
+      route: plan.route,
+    },
+  };
+}
+
+/* ─────────── 流式（W7·5） ─────────── */
+
+/**
+ * 流式事件。
+ *
+ * `cites` **先于**任何 token 发出：检索只要 14 ms，而生成要 2–8 s。
+ * 先把「我用的是哪几段资料」摆出来，用户立刻知道系统找对了没有——
+ * 这比首字快 2 ms 有用得多，也是流式真正的价值所在。
+ */
+export type AskEvent =
+  | { type: "cites"; citations: Citation[]; route: Route; k: number; retrieveMs: number; model: string }
+  | { type: "token"; text: string }
+  | { type: "done"; answer: string; check: CitationCheck; ms: AskResult["meta"]["ms"]; route: Route }
+  | { type: "error"; reason: string }
+  | { type: "aborted" };
+
+/**
+ * 流式调 Ollama。逐块 yield 文本增量。
+ *
+ * 取消靠 `signal`：客户端断开 → route 里 abort → 这里 fetch 的 signal 跟着中断，
+ * **Ollama 那边也会停止生成**。不这么做的话，用户关掉页面，模型还在跑完那 260 token。
+ */
+async function* generateStream(
+  prompt: string,
+  numPredict: number,
+  signal?: AbortSignal
+): AsyncGenerator<string> {
+  const controller = new AbortController();
+  const relay = () => controller.abort();
+  signal?.addEventListener("abort", relay, { once: true });
+  const timer = setTimeout(() => controller.abort(), ASK_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${OLLAMA_URL}/api/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: OLLAMA_MODEL,
+        prompt,
+        stream: true,
+        options: { temperature: 0, num_predict: numPredict },
+      }),
+    });
+    if (!res.ok || !res.body) throw new Error(`Ollama 返回 ${res.status}`);
+
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        // NDJSON。整行才 parse——半行会被 JSON.parse 抛掉，那正好是「等下一块」的意思
+        const j = JSON.parse(line) as { response?: string };
+        if (j.response) yield j.response;
+      }
+    }
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", relay);
+  }
+}
+
+/**
+ * 流式问答。和 `ask()` 共用 `pick()`，所以两条入口的题在页面上和脚本里表现一致。
+ */
+export async function* askStream(
+  question: string,
+  opts: { k?: number; noTools?: boolean; signal?: AbortSignal } = {}
+): AsyncGenerator<AskEvent> {
+  const k = opts.k ?? ASK_K;
+  const t0 = Date.now();
+
+  const picked = pick(question, k, opts.noTools);
+  if ("error" in picked) {
+    yield { type: "error", reason: picked.error };
+    return;
+  }
+  const plan = picked;
+
+  yield {
+    type: "cites",
+    citations: plan.citations,
+    route: plan.route,
+    k: plan.k,
+    retrieveMs: plan.retrieveMs,
+    model: OLLAMA_MODEL,
+  };
+
+  if (plan.prompt === null) {
+    const answer = plan.fixedAnswer ?? "";
+    yield { type: "token", text: answer };
+    yield {
+      type: "done",
+      answer,
+      check: checkAnswer(answer, plan.k),
+      ms: { retrieve: plan.retrieveMs, generate: 0, total: Date.now() - t0 },
+      route: plan.route,
+    };
+    return;
+  }
+
+  const tG = Date.now();
+  let acc = "";
+  try {
+    for await (const tok of generateStream(plan.prompt, plan.numPredict, opts.signal)) {
+      acc += tok;
+      yield { type: "token", text: tok };
+    }
+  } catch (e) {
+    // 用户取消和模型出错要分开报：前者不是错误，页面上不该显示红色
+    if (opts.signal?.aborted || (e instanceof Error && e.name === "AbortError" && opts.signal?.aborted)) {
+      yield { type: "aborted" };
+      return;
+    }
+    if (plan.route !== "retrieve") {
+      yield* askStream(question, { ...opts, noTools: true });
+      return;
+    }
+    yield { type: "error", reason: e instanceof Error ? e.message : "生成失败" };
+    return;
+  }
+
+  const answer = acc.trim();
+  if (!answer) {
+    yield { type: "error", reason: "模型返回空" };
+    return;
+  }
+  yield {
+    type: "done",
+    answer,
+    check: checkAnswer(answer, plan.k),
+    ms: { retrieve: plan.retrieveMs, generate: Date.now() - tG, total: Date.now() - t0 },
+    route: plan.route,
   };
 }
