@@ -74,21 +74,55 @@ export function inspectQuery(q: string): { raw: string; cleaned: string; timeHin
   return { raw: q, cleaned: cleanQuery(q) || q, timeHint: TIME_WORDS.test(q) };
 }
 
-interface Built {
+export interface Built {
   bm25: BM25Index;
   chunks: Chunk[];
   /** `docPath\0父路径` → 该父节下所有小问标题（有序、去重） */
   sections: Map<string, string[]>;
+  /** 索结构版本。加字段就 +1，旧缓存会自动失效重建（W15） */
+  schema: number;
   builtMs: number;
   docs: number;
   dir: string;
   builtAt: string;
 }
 
+/**
+ * 当前索引结构版本。
+ *
+ * 为什么需要它（W15 真事故）：W12 给 Built 加了 `sections` 字段，但 dev 服务是
+ * 更早启动的，`globalThis.__kbIndex` 里那个对象**没有** `sections`。热更新后
+ * 新代码执行 `idx.sections.get(...)` 直接抛 `Cannot read properties of undefined`，
+ * 网页整页报错。重启才愈 —— 但这在生产上就是一次真实宕机。
+ *
+ * 缓存是为了「别每改一行代码就重建 221ms 索引」，不该为了躲热更新就删掉；
+ * 正确做法是**让旧缓存自己承认过期**。凡是往 Built 里加必需字段，必须把这里的
+ * 数字 +1，并在 `isCurrent()` 里补上对应检查。
+ */
+export const INDEX_SCHEMA = 2;
+
 // 模块级缓存。用 globalThis 而不是普通模块变量：Next dev 会热重载模块，
 // 普通变量每次改代码都会被重置，等于每改一行就重建 221ms 的索引。
 // 生产环境单进程只建一次。
 const g = globalThis as unknown as { __kbIndex?: Built };
+
+/**
+ * 缓存能不能继续用。检查三件事：结构版本、关键字段真的存在、语料目录没变。
+ * 只查 `schema` 不够 —— 有人手工往 globalThis 塞对象、或 mock 注入时版本号可以
+ * 对但字段是空的；只查字段也不够 —— 改了 KB_DIR 该重建。
+ */
+function isCurrent(x: Built | undefined): x is Built {
+  if (!x || x.schema !== INDEX_SCHEMA) return false;
+  if (!x.sections || !(x.sections instanceof Map)) return false;
+  if (!Array.isArray(x.chunks) || !x.chunks.length || !x.bm25) return false;
+  // 目录变了必须重建，否则换知识库后还在用旧索引答（比报错更隐蔽）
+  try {
+    if (x.dir !== kbDirs().join(",")) return false;
+  } catch {
+    return false; // 环境变量没配好，交给 build() 去抛原始错误
+  }
+  return true;
+}
 
 /**
  * 语料根，支持**多个目录**。
@@ -150,6 +184,7 @@ function build(): Built {
     bm25,
     chunks,
     sections: buildSections(chunks),
+    schema: INDEX_SCHEMA,
     builtMs: performance.now() - t0,
     docs,
     dir: dirs.join(","),
@@ -202,7 +237,9 @@ function sectionOf(c: Chunk, sections: Map<string, string[]>): SectionSlot | und
 }
 
 export function getIndex(): Built {
-  if (!g.__kbIndex) g.__kbIndex = build();
+  // 不用 `if (!g.__kbIndex)`：旧版本的对象**存在但缺字段**，正是事故现场。
+  // 走 isCurrent 校验，过期就重建，让热更新后的第一个请求也能正常回答。
+  if (!isCurrent(g.__kbIndex)) g.__kbIndex = build();
   return g.__kbIndex;
 }
 

@@ -55,21 +55,71 @@ npx next start -p 3010  # ✓ Ready in 101 ms
 而 `/api/ask` 没有任何 token、没有登录、没有限流。这个仓是公开的，那里面的知识库
 是真实健康记录。
 
+**W15 起这条已经是默认行为，不再依赖「记得加 `-H`」**：`npm run dev` 和
+`npm run start` 都写死了 `-H 127.0.0.1`。实测生产模式下 `lsof` 显示
+`127.0.0.1:3000`，本机 200、局域网 `000`。
+
 两条路，按你在不在意手机访问来选：
 
 ```bash
-# A. 只在本机用（最省事，已实测有效）
-npx next start -H 127.0.0.1 -p 3000
+# A. 只在本机用（默认，已实测有效）
+npm run start -- -p 3000
 
 # B. 要手机/别的设备访问 → 前置一层反向代理做 Basic Auth 或 token 校验，
-#    应用本身仍然只听回环：
-npx next start -H 127.0.0.1 -p 3000    # 再让 nginx/caddy 反代 3000
+#    应用本身仍然只听回环：npm run start -- -p 3000，再让 nginx/caddy 反代
 ```
 
 **不要**用「把端口暴露到公网 + 靠 URL 猜不到」当保护——路径可以扫，也可以从 Referer 拿到。
 
 应用层鉴权（`ASK_TOKEN` 之类）目前**没做**：它需要一个明确的产品决定
 （谁能看、token 怎么发、要不要区分只读/可问），不该在部署这一步顺手塞一个。
+
+### 一个会骗人的验证结果：502 不是服务
+
+W15 实测时，绕过代理前 `curl http://<内网IP>:3000/` 返回 **502**，看起来像
+「局域网还能访问」。其实是环境里的 `HTTP_PROXY` 把连不上的请求接过去、由代理回了个 502。
+加 `--noproxy '*'` 之后是 `000`（真的连不上）。`service.sh status` 已固定绕过代理。
+
+**判断「服务有没有暴露」要看 `lsof` 的监听地址，不能只看 HTTP 状态码。**
+
+---
+
+## 三·五、常驻服务（W15）
+
+```bash
+./scripts/service.sh status      # 在不在、听在哪、本机/局域网可达性
+./scripts/service.sh logs        # stdout / stderr 最近 40 行
+./scripts/service.sh install     # 写 launchd plist，登录自启 + KeepAlive 崩溃拉起
+./scripts/service.sh restart     # 改完代码 / 知识库变了，重读索引
+./scripts/service.sh uninstall   # 停掉并移除自启
+./scripts/service.sh start-once  # 没装 launchd 时前台临时起一个
+```
+
+**为什么常驻用生产模式而不是 `npm run dev`**：dev 会热重载模块，而检索索引挂在
+`globalThis` 上跨热更新存活。W12 给索引加了 `sections` 字段，旧服务内存里那个对象
+没有它，新代码一读就 `Cannot read properties of undefined`，整页报错（见第七节）。
+常驻服务要的是「不自己变」：改完代码显式 `restart` 一次。
+
+### 装自启时撞到的环境限制（**这一条没验证完**）
+
+`launchctl bootstrap` / `load` / `asuser` / `user` 域**全部**报
+`Bootstrap failed: 5: Input/output error`，连一个只 `/bin/echo hello` 的最小 plist 也一样——
+当前会话没有 GUI 登录上下文，不是配置写错。
+
+配置本身静态验过（`npm run w8:service`，24/24）：plist 语法合法、
+`RunAtLoad` / `KeepAlive` / `ThrottleInterval=10` 都在、走生产 start、
+日志落盘、plist 不在公开仓里。它已经落在 `~/Library/LaunchAgents/`，
+**下次登录 launchd 会自动加载**；但「登录后真的起来了」「kill 之后真的被拉起」
+这两条**当场没验证过**。
+
+在你自己的终端（有 GUI 登录上下文）里跑一次就能补上：
+
+```bash
+~/dev/fitness-agent/scripts/service.sh install
+~/dev/fitness-agent/scripts/service.sh status   # 应看到 state = running
+```
+
+`install` 在注册失败时**不会打印「已安装」**，会明确提示待验证，不会骗人。
 
 ---
 
@@ -113,7 +163,29 @@ OLLAMA_MODEL=qwen2.5:7b-instruct
    有了 docker 之后要补的验证：多阶段构建、`node:22-alpine` 下 `next start` 起得来、
    卷挂载后索引能建、镜像里 `private/` 和 `.env.local` 都在 `.dockerignore` 里。
 2. **没有 TLS**。走反向代理时在那一层解决。
-3. **没有进程守护**。崩了不会自己起，systemd / launchd / pm2 都行，没试过。
+3. ~~没有进程守护~~ **配置已写，但未验证生效**（W15）：`launchd` plist 就位、
+   `KeepAlive` 开着，但本会话注册不了（见第三节·五）。**别把它当成已上线。**
 4. **首次请求会慢**：索引 349 ms + 模型冷加载 ~1.5 s，之后单题热态 1.1–1.6 s。
    想压掉冷启动就在启动时预热一次 `GET /api/ask`。
 5. **容器的内存**自己量：5389 块索引 + 7B 模型，没在本机做过 cgroup 限制下的测试。
+6. **索引缓存的跨版本兼容已修**（W15，见下节），但只验了「旧缓存自动重建」这一条；
+   真上线后的滚动更新顺序（先停旧进程再起新进程）还没跑过。
+
+---
+
+## 七、索引缓存跨版本兼容（W15 修掉的那次宕机）
+
+**症状**：dev 服务在 W12 之前启动，`globalThis.__kbIndex` 里躺着一个没有
+`sections` 字段的旧索引。W12 代码热更新后执行 `idx.sections.get(...)`，
+直接抛 `Cannot read properties of undefined`，网页整页报错，重启才愈。
+
+**根因**：为了「改一行代码不重建 221 ms 索引」把索引挂在了 `globalThis` 上跨热更新存活。
+缓存本身没错，错在 `getIndex()` 只判断了「对象在不在」，没判断「对象是不是这一版代码要的」。
+
+**修法**：`Built` 加 `schema` 版本号；`isCurrent()` 同时检查版本、关键字段真的存在、
+语料目录没变。旧缓存**存在但缺字段**时自动重建，第一个请求就正常回答。
+以后往 `Built` 加必需字段必须 `INDEX_SCHEMA + 1` 并补检查。
+
+判据 `npm run w8:cache`（16/16，不调模型）：手工注入「没有 schema / sections 的旧对象」
+「版本号对但字段为空」「空块」「目录变了」四种坏缓存，验证 `getIndex()` 与 `retrieve()`
+都不抛、都重建、答案仍带节位标注。

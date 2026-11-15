@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -H 127.0.0.1",
     "build": "next build",
-    "start": "next start",
+    "start": "next start -H 127.0.0.1",
     "typecheck": "tsc --noEmit",
     "profile": "tsx scripts/profile_inputs.ts",
     "test:5": "tsx scripts/compliance.ts --n 5",
@@ -30,7 +30,9 @@
     "w7:multi": "tsx scripts/multi_probe.ts",
     "w7:agg": "tsx scripts/agg_probe.ts",
     "w7:stale": "tsx scripts/stale_probe.ts",
-    "w7:section": "tsx scripts/section_probe.ts"
+    "w7:section": "tsx scripts/section_probe.ts",
+    "w8:cache": "tsx scripts/cache_probe.ts",
+    "w8:service": "tsx scripts/service_probe.ts"
   },
   "dependencies": {
     "next": "16.4.6",
