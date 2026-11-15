@@ -13,7 +13,7 @@
 |---|---|---|
 | ① 接口打通 | 本地模型能返回中文 | 已完成 |
 | **② 结构化输出** | **20 篇力量记录全部合规** | **20/20**（2026-11-15，语法与字段两层都 20/20） |
-| ③ 切片与召回 | md 按标题层级切片 → 向量入库 → 召回 ≥70% | 未开始 |
+| ③ 切片与召回 | md 按标题层级切片 → 向量入库 → 召回 ≥70% | **切片完成**（W3，11-15）：804 篇 → 2624 chunk、1214 个动作结构化，层级与抽取判据全绿；向量入库与召回待 W4/W5 |
 | ④ 流式与中断 | 流式输出，可随时中断 | 未开始 |
 | ⑤ 控制循环 | 循环骨架 → 循环可停 | 未开始 |
 | ⑥ 评测与上线 | 评测集 → 基线表 → 部署 | 未开始 |
@@ -35,7 +35,9 @@
   → ok / 兜底（永不 500）
 ```
 
-## 三条命令
+## 命令
+
+**结构化输出（W2，要跑模型）**
 
 ```bash
 npm run dev        # 开发服务器
@@ -44,7 +46,20 @@ npm run test:20    # 完整测试（20 篇力量记录，约 15 分钟）
 npm run profile    # 只看输入规模，不跑模型（1 秒）
 ```
 
-需要本机跑着 Ollama 并已拉取 `qwen2.5:7b-instruct`：
+**语料 / 切片 / 结构抽取（W3，不调模型，秒级）**
+
+```bash
+npm run w3:stats   # 遍历 804 篇 → 条目数 + type/年份分布 + 5 条判据（含递归自洽）
+npm run w3:chunk   # 切 2624 个 chunk + 3 条层级判据
+npm run w3:parse   # 抽 1214 个动作 + 3 条抽取判据（含容量交叉校验）
+
+# 单篇细看
+npx tsx scripts/chunk_dump.ts --doc 2026-11-07-训练-01-腿A        # chunk 树
+npx tsx scripts/parse_training.ts --doc 2026-11-07-训练-01-腿A    # 逐组打印
+npx tsx scripts/parse_training.ts --json 2026-11-07-训练-01-腿A   # 原始 JSON
+```
+
+需要本机跑着 Ollama 并已拉取 `qwen2.5:7b-instruct`（只有 W2 那几个命令需要）：
 
 ```bash
 ollama list                       # 确认模型在
@@ -54,12 +69,18 @@ ollama serve                      # 没在跑就起一下
 ## 目录
 
 ```
-src/types/training.ts        78 行   记录长什么样（Zod schema）
-src/lib/extract.ts          119 行   prompt + 输入清洗 + 两道校验，唯一出处
-src/app/api/extract/route.ts 69 行   HTTP 接口
-scripts/compliance.ts       167 行   合规统计
-scripts/samples.ts           37 行   样本口径（只取力量记录），统计脚本共用
-scripts/profile_inputs.ts   155 行   输入规模画像，不跑模型
+src/types/training.ts          78 行   记录长什么样（Zod schema）
+src/lib/extract.ts            119 行   prompt + 输入清洗 + 两道校验，唯一出处
+src/app/api/extract/route.ts   69 行   HTTP 接口
+src/lib/corpus.ts             145 行   语料遍历 + frontmatter 解析，唯一出处（W3）
+src/lib/chunk.ts              116 行   按标题层级切片，带 headingPath（W3）
+src/lib/training-parse.ts     169 行   训练记录 → 结构化 JSON 的正则，唯一出处（W3）
+scripts/compliance.ts         167 行   合规统计
+scripts/samples.ts             37 行   样本口径（只取力量记录），统计脚本共用
+scripts/profile_inputs.ts     155 行   输入规模画像，不跑模型
+scripts/corpus_stats.ts       136 行   W3① 条目数与递归自洽判据
+scripts/chunk_dump.ts         124 行   W3② 切片统计与层级判据
+scripts/parse_training.ts     190 行   W3③ 结构抽取统计与容量交叉校验
 docs/w2-structured-output.html       验收报告页
 docs/index.html                      GitHub Pages 入口
 ```
@@ -77,7 +98,19 @@ docs/index.html                      GitHub Pages 入口
 第三轮还顺手修了一处校准错误：模型对可省字段给 `null` 而非省略，schema 只认省略，于是整条被判不合规。
 `null` 与缺失同义 → 归一化成 `undefined`，但类型错（字符串、负数）照旧拦。
 
-## 两个设计取舍
+## 切片为什么不按字数切（W3）
+
+语料的语义边界就是标题：`## 动作明细` 下是一组动作、`## 摘要` 是一句话结论。按固定字数切
+（512 token 滑窗那套）会把「1RM 的定义」切成上一块结尾 + 下一块开头，检索命中一个也读不懂。
+
+所以切两层：主边界 `##`；若该段里还有 `###` 就继续细到叶子，但 `headingPath` 保留完整父级
+（`动作明细 > 史密斯深蹲（kg）— 容量 2060`）。训练记录的 `## 动作明细` 有 8 个动作、700 多字，
+整段做成一个 chunk 语义太杂——问「深蹲掉力」会命中整段，前 5 条近邻全是同一篇的其他动作。
+
+过短块（`## 摘要` 那种一句话）**不在切片阶段合并**：合并属于检索调优，W5 看 recall 再定。
+切片只负责不丢内容、可回溯。
+
+## 三个设计取舍
 
 1. **单一出处**：prompt、输入清洗、校验只在 `src/lib/extract.ts` 写一份，接口和测试都 import 它。
    两份实现必然漂移，改了接口那份忘了测试那份，测试会一直绿着而线上已错。
@@ -89,7 +122,11 @@ docs/index.html                      GitHub Pages 入口
 
 - **HTTP 层未实测**：完整测试直接请求 Ollama，`/api/extract` 那条 route 还没 curl 过（本机沙箱起不了 dev server）。
 - **只覆盖力量记录**：cardio 的 schema 分支还在（真喂游泳文本不会崩），但不在评测范围内。
-- **只有 20 篇**：样本量够说明稳定性，不够说明分布外泛化。167 篇力量记录里还有 147 篇没进过评测。
+- **只有 20 篇**：样本量够说明稳定性，不够说明分布外泛化。213 篇力量记录里还有 193 篇没进过评测。
+- **W4 之前要看的三件事**（W3 跑出来的，都记在判据输出里）：
+  - **148 个 chunk 超过 1200 字被硬切**，最长的是健康记录（`part 8`）。硬切点可能落在语义中间，W4 embed 前先确认要不要调 `maxChars` 或改成按段落优先切。
+  - **容量字段不能当基准**：1214 个动作里 41 个对不上，其中 34 个是引体向上——练练对自重动作按体重折算、对双侧动作算两侧。这是 App 的算法，不是解析错；但意味着「容量」只能在同动作内比较，不能跨动作求和。
+  - **2 篇源数据的「动作明细」段本身是空的**（2025-08-11 拳击、2025-09-11 训练），抽取正确返回 0 个动作，不是 bug。
 
 ## 环境备注
 

@@ -9,7 +9,10 @@
     "typecheck": "tsc --noEmit",
     "profile": "tsx scripts/profile_inputs.ts",
     "test:5": "tsx scripts/compliance.ts --n 5",
-    "test:20": "tsx scripts/compliance.ts --n 20"
+    "test:20": "tsx scripts/compliance.ts --n 20",
+    "w3:stats": "tsx scripts/corpus_stats.ts",
+    "w3:chunk": "tsx scripts/chunk_dump.ts",
+    "w3:parse": "tsx scripts/parse_training.ts"
   },
   "dependencies": {
     "next": "16.4.6",
