@@ -119,12 +119,36 @@ function main(): void {
   lines.push("");
 
   // ── N6 ──
-  // 单看「最重一组」会误判：11-07 是 60kg 但掉到 60×6，11-14 是 55kg 却做了 4×8，
-  // 容量从 2060 涨到 2265。重量降、容量涨，结论完全相反。所以同时报容量，
-  // 并按容量判断趋势——这是记账式的口径，不是感觉式的。
+  // 单看「最重一组」会误判：11-07 是 60kg 但掉到 60×6，11-14 是 55kg 却做了 4×8。
+  // 所以要看容量。但容量本身还有第二个坑：**热身组算不算**。
+  //   App（练练）写入的 `容量` 字段**含热身组** —— 11-07 = 40×8 热身(320) + 1740 工作 = 2060；
+  //   11-14 = 35×8 + 45×5 热身(505) + 1760 工作 = 2265。
+  // 于是同一个动作，含热身是「+4.9% 基本持平」，剔除热身是「-12.8% 在跌」，结论相反。
+  // 涨的那部分全靠 11-14 多插的一组热身撑起来 —— 那不是能力涨。
+  // 所以这里必须**两个口径同时报**，挑一个好看的报等于自欺。
   const volOf = (body: string, name: string): number => {
     const m = body.match(new RegExp(`^### ${name}（kg）— 容量 (\\d+)`, "m"));
     return m ? Number(m[1]) : 0;
+  };
+  /** 按行重算：带「热身」标记的组单独累计，其余算工作容量 */
+  const splitVolOf = (body: string, name: string): { work: number; hot: number } => {
+    const lines = body.split("\n");
+    let inside = false;
+    let work = 0;
+    let hot = 0;
+    for (const line of lines) {
+      if (line.startsWith("### ")) {
+        inside = line.startsWith(`### ${name}（kg）`);
+        continue;
+      }
+      if (!inside) continue;
+      const m = line.match(/组\d+：(\d+(?:\.\d+)?)kg\s*[×x]\s*(\d+)/);
+      if (!m) continue;
+      const v = Number(m[1]) * Number(m[2]);
+      if (line.includes("热身")) hot += v;
+      else work += v;
+    }
+    return { work, hot };
   };
   const topOf = (body: string, name: string): number[] => {
     const lines = body.split("\n");
@@ -136,41 +160,66 @@ function main(): void {
         continue;
       }
       if (!inside) continue;
+      // 热身组不进「最重一组」——不然 60kg 热身的动作会盖住 55kg 的正式主项
+      if (line.includes("热身")) continue;
       for (const m of line.matchAll(/(\d+(?:\.\d+)?)\s*kg\s*[×x]\s*\d+/g)) out.push(Number(m[1]));
     }
     return out;
   };
-  const w: Array<{ date: string; top: number; vol: number; degrade: boolean }> = [];
+  const w: Array<{ date: string; top: number; appVol: number; work: number; hot: number; degrade: boolean }> = [];
   for (const s of sq) {
     const weights = topOf(s.doc.body, "史密斯深蹲");
     if (!weights.length) continue;
     // 档位写在文件名里（「试探档」「降级」「复训」），是真实数据里唯一可靠的降级标记。
     // 不排除它就会得到「容量在跌」的假结论：10-30 那次只做了 720 容量。
     const degrade = /试探档|降级|复训/.test(s.doc.name);
-    w.push({ date: s.date, top: Math.max(...weights), vol: volOf(s.doc.body, "史密斯深蹲"), degrade });
+    const sv = splitVolOf(s.doc.body, "史密斯深蹲");
+    w.push({
+      date: s.date,
+      top: Math.max(...weights),
+      appVol: volOf(s.doc.body, "史密斯深蹲"),
+      work: sv.work,
+      hot: sv.hot,
+      degrade,
+    });
   }
   const normal = w.filter((x) => !x.degrade);
-  const recent = normal.slice(-2);
-  const earlier = normal.slice(-6, -2);
-  const avgVol = (a: typeof w) => a.reduce((x, y) => x + y.vol, 0) / (a.length || 1);
-  const rv = avgVol(recent);
-  const ev = avgVol(earlier);
+  const recent = normal.slice(-3);
+  const earlier = normal.slice(-8, -3);
+  const avgOf = (a: typeof w, pick: (x: (typeof w)[number]) => number) =>
+    a.reduce((s, x) => s + pick(x), 0) / (a.length || 1);
+  const trend = (a: number, b: number) => (a > b * 1.05 ? "在涨" : a < b * 0.95 ? "在跌" : "基本持平");
+  const appR = avgOf(recent, (x) => x.appVol);
+  const appE = avgOf(earlier, (x) => x.appVol);
+  const workR = avgOf(recent, (x) => x.work);
+  const workE = avgOf(earlier, (x) => x.work);
   const degraded = w.filter((x) => x.degrade).slice(-2);
   lines.push(`N6  ｜深蹲重量最近在涨还是在跌`);
   lines.push(
-    `    → 正常档最近 ${recent.length} 次：${recent.map((x) => `${x.date.slice(5)} 最重${x.top}kg/容量${x.vol}`).join("　")}`
+    `    → 正常档最近 ${recent.length} 次：${recent
+      .map((x) => `${x.date.slice(5)} 最重${x.top}kg/工作容量${x.work}`)
+      .join("　")}`
   );
   lines.push(
-    `       此前 ${earlier.length} 次平均容量 ${ev.toFixed(0)} → 最近 ${rv.toFixed(0)}：` +
-      `${rv > ev * 1.03 ? "在涨" : rv < ev * 0.97 ? "在跌" : "基本持平"}`
+    `       口径A 含热身（App 的「容量」字段） 此前 ${earlier.length} 次 ${appE.toFixed(0)} → 最近 ${appR.toFixed(0)}`
+  );
+  lines.push(`             ${trend(appR, appE)}（${((appR / appE - 1) * 100).toFixed(1)}%）`);
+  lines.push(
+    `       口径B 剔除热身（只算正式组）       此前 ${earlier.length} 次 ${workE.toFixed(0)} → 最近 ${workR.toFixed(0)}`
+  );
+  lines.push(`             ${trend(workR, workE)}（${((workR / workE - 1) * 100).toFixed(1)}%）`);
+  lines.push(
+    `       ⚠ 两个口径结论相反时，**不要挑一个报**。最近 3 次热身占比：` +
+      recent.map((x) => `${x.date.slice(5)} ${((x.hot / (x.appVol || 1)) * 100).toFixed(0)}%`).join("、") +
+      ` —— 含热身那点涨幅是热身组插进来的，不是能力涨。`
   );
   if (degraded.length)
     lines.push(
-      `       已排除的降级课：${degraded.map((x) => `${x.date.slice(5)}（容量${x.vol}）`).join("、")} —— 混进来会把趋势拉成「在跌」`
+      `       已排除的降级课：${degraded.map((x) => `${x.date.slice(5)}（App容量${x.appVol}）`).join("、")} —— 混进来会把趋势拉成「在跌」`
     );
   lines.push(
-    `       ⚠ 两个都要避开：① 只看最大重量会判成跌（60→55），容量其实 2060→2265 在涨；` +
-      `② 不排除试探档会判成跌（均值被 720 拉低）。涨跌看容量，且只跟同档比。`
+    `       ⚠ 三个坑一起避开：① 只看最大重量会判成跌（60→55）；② 不排除试探档会判成跌（被 720 拉低）；` +
+      `③ 用 App 的容量不看热身占比会判成涨。`
   );
 
   console.log(lines.join("\n"));

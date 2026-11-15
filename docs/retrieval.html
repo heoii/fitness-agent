@@ -462,31 +462,45 @@ N4 最近一次练背是哪天       → 2026-11-11
 N5 这个月平均睡多少小时     → 6.97 h（14 天，6 天 &lt; 7h）
 N6 深蹲重量在涨还是跌       → 见下</pre>
 
-  <h3>N6 值得单独说：数字对了，结论还可能错</h3>
-  <p>这题第一版跑出来是「在跌」。我核了原始数据，发现<strong>两个坑同时踩了</strong>：</p>
+  <h3>N6 值得单独说：同一个问题，三个指标三个答案</h3>
+  <p>这题我改了三轮，每轮都以为改对了。最后它<strong>没有「一个答案」，而这就是结论</strong>。</p>
 
   <table>
-    <thead><tr><th style="width:120px">日期</th><th class="mono">最重</th><th class="mono">容量</th><th>档位</th></tr></thead>
+    <thead><tr><th style="width:96px">日期</th><th class="mono">最重一组</th><th class="mono">App 容量</th><th class="mono">工作容量</th><th class="mono">热身占比</th><th>档位</th></tr></thead>
     <tbody>
-      <tr class="dim"><td class="mono">10-30</td><td class="mono">40 kg</td><td class="mono">720</td><td>试探档（降级复训）</td></tr>
-      <tr><td class="mono">11-07</td><td class="mono">60 kg</td><td class="mono">2060</td><td>正常档，末组掉到 60×6</td></tr>
-      <tr><td class="mono">11-14</td><td class="mono">55 kg</td><td class="mono">2265</td><td>正常档，55×8 做满 4 组</td></tr>
+      <tr class="dim"><td class="mono">10-30</td><td class="mono">40 kg</td><td class="mono">720</td><td class="mono">400</td><td class="mono">44%</td><td>试探档（降级复训）</td></tr>
+      <tr><td class="mono">11-07</td><td class="mono">60 kg</td><td class="mono">2060</td><td class="mono">1740</td><td class="mono">16%</td><td>正常档，末组掉到 60×6</td></tr>
+      <tr><td class="mono">11-14</td><td class="mono">55 kg</td><td class="mono">2265</td><td class="mono">1760</td><td class="mono">22%</td><td>正常档，55×8 做满 4 组</td></tr>
     </tbody>
   </table>
 
   <ul>
-    <li><strong>坑一：看最大重量。</strong>60 → 55，判「在跌」。但容量 2060 → 2265 是涨的
-    ——重量降了次数补回来了，这是典型的容量推进。</li>
-    <li><strong>坑二：不排除降级课。</strong>把 10-30 的 720 混进平均，最近几次的均值被拉低，
-    还是判「在跌」。</li>
+    <li><strong>坑一：看最大重量。</strong>60 → 55，判「在跌」。</li>
+    <li><strong>坑二：不排除降级课。</strong>把 10-30 的 720 混进平均，均值被拉低，还是判「在跌」。</li>
+    <li><strong>坑三（第二轮才发现的）：App 的「容量」字段含热身组。</strong>
+    2060 = 40×8 热身（320）+ 1740 工作；2265 = 35×8 + 45×5 热身（505）+ 1760 工作。
+    所以 2060 → 2265 那点涨幅，一大半是 11-14 多插的一组热身撑起来的——那不是能力涨。</li>
   </ul>
 
-  <p>两个都修掉之后，答案是：<strong>正常档平均容量 1798 → 2163，在涨</strong>，
-  并显式列出被排除的降级课。这条口径写进了脚本注释，防止以后被改回去。</p>
+  <p>三个坑都修完之后，两个口径给出相反的答案：</p>
+
+  <table>
+    <thead><tr><th>口径</th><th class="mono">此前 5 次</th><th class="mono">最近 3 次</th><th>结论</th></tr></thead>
+    <tbody>
+      <tr><td>含热身（App 容量）</td><td class="mono">1865</td><td class="mono">1957</td><td>基本持平（+4.9%）</td></tr>
+      <tr><td>剔除热身（正式组）</td><td class="mono">1711</td><td class="mono">1492</td><td>在跌（−12.8%）</td></tr>
+    </tbody>
+  </table>
+
+  <p>我第一版把这题写成「正常档平均容量 1798 → 2163，在涨」并且<strong>发布了出去</strong>——
+  那个结论是错的，当时只用了 App 容量一个口径。现在脚本强制同时报两个口径、并打印每次的热身占比，
+  让人一眼看出「涨的那部分从哪来」。这才是这题唯一正确的输出形式：<strong>不挑一个好看的结论，而是把口径冲突摆到台面上。</strong></p>
 
   <div class="quote grey">
-    <p>这一节的意义不在那 6 个答案，而在于说明一件事：<strong>「查得准」和「判得对」是两个问题</strong>。
-    数值入口负责前者，后者需要知道档位、组数、掉力这些上下文——那正是检索和解析要提供的东西。</p>
+    <p>这一节的意义不在那 6 个答案。它说明的是：<strong>「查得准」和「判得对」是两个问题，
+    而「判得对」还分两层</strong>——第一层要知道档位、掉力这些上下文（数据要有），
+    第二层要确认指标本身的<strong>口径定义</strong>（数据怎么算）。第一层靠检索和解析，
+    第二层只能靠人先把口径钉死，再让代码照着算。</p>
   </div>
 </section>
 

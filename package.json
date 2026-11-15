@@ -16,7 +16,8 @@
     "w4:embed": "tsx scripts/embed_sample.ts",
     "w5:index": "tsx scripts/build_index.ts",
     "w5:eval": "tsx scripts/eval_retrieval.ts",
-    "w5:qa": "tsx scripts/structured_qa.ts"
+    "w5:qa": "tsx scripts/structured_qa.ts",
+    "w6:latency": "tsx scripts/latency_probe.ts"
   },
   "dependencies": {
     "next": "16.4.6",
