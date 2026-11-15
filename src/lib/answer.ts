@@ -14,6 +14,7 @@ import {
   countTraining,
   latestSession,
   resolveCompare,
+  staleExercises,
   getExerciseTrend,
   matchExercise,
   entitiesIn,
@@ -66,12 +67,13 @@ export interface AskResult {
     /** 走了哪条入口：retrieve = 语义检索；trend = 数值工具（算好的字段，模型只表述）；
      *  count = 计数工具（遍历全语料数出来的次数）
      *  latest = 定位工具（遍历全语料取的最晚一条）
-     *  compare = 区间对比（两个区间的次数与每周频率，答案全部由代码算出） */
+     *  compare = 区间对比（两个区间的次数与每周频率，答案全部由代码算出）
+     *  stale = 最久没练（对每个动作取最晚日期再排序，答案由代码算出） */
     route: Route;
   };
 }
 
-export type Route = "retrieve" | "trend" | "count" | "latest" | "compare";
+export type Route = "retrieve" | "trend" | "count" | "latest" | "compare" | "stale";
 
 /**
  * 「这次问答该怎么答」的决策结果。
@@ -609,11 +611,92 @@ ${blocks}${missNote}
 要求：
 ${askAll}
 2. 每条用**它自己的编号**标出处（第 1 条用 [1]，第 2 条用 [2]），编号不要错位。
-3. 如果用户问「多久没练」，把「距今 N 天」一起报出来。
+3. **日期和天数都要报**（写成「2026-07-31，距今 107 天」）。只报天数用户没法核对日期，
+   只报日期又答不上「多久」——这句话经常连着问两件事。
 4. 计划里写了但没做的课不算——不要拿明细里没有的东西推断。
 5. 中文，不超过 ${got.length > 1 ? "160" : "60"} 字。
 
 问题：${question}`;
+}
+
+/* ─────────── 荒废入口：哪些动作我很久没练了 ─────────── */
+
+const NEVER_INTENT = /从来没|从没|没练过|没做过|没试过/;
+const STALE_INTENT = /多久没练|好久没练|多长时间没练|很久没练|哪些.{0,6}没练|一直没练|荒废|多久没做/;
+
+/**
+ * 「哪些动作我很久没练了」——集合差 + 日期，任何一段文字里都没有这个结果。
+ *
+ * 必须和「哪些动作我**从来**没练过」分开：
+ *   - 「很久没练」= 语料里练过、但最近一次很久以前 → **能算**
+ *   - 「从来没练过」= 需要一个完整动作库 → **算不了**
+ *     语料里只有练过的 136 个动作（`action_muscles.json` 从训练记录反推，
+ *     不是 free-exercise-db 的 876 条）。拿「很久没练」的结果冒充「没练过」，
+ *     用户会以为那些动作自己真的没碰过——而它们只是没被记录。
+ *
+ * 两条都不过模型：答案全是结构化列表，让 7B 复述日期只会错。
+ */
+function planStale(question: string): Plan | null {
+  const never = NEVER_INTENT.test(question);
+  if (!never && !STALE_INTENT.test(question)) return null;
+
+  // 指定了具体动作/部位就交给 latest：
+  // 「硬拉多久没练了」问的是**那一个**动作的日期，不是全局最久没练排行榜。
+  // 第一版没这层判断，问硬拉答的是「悍马上斜推胸 467 天」——答的是另一个问题，
+  // 而且列表看起来很像正确答案。
+  if (entitiesIn(question).length) return null;
+
+  let r: ReturnType<typeof staleExercises>;
+  try {
+    r = staleExercises({ limit: 5 });
+  } catch {
+    return null;
+  }
+  if (!r.ok) return null;
+
+  // 「从来没练过」：明说做不到，并给出相邻的能力，别让用户以为系统什么都不知道
+  if (never)
+    return {
+      route: "stale",
+      citations: [],
+      k: 0,
+      prompt: null,
+      fixedAnswer:
+        `列不出来：语料里只有你练过的动作（共 ${r.total} 个），没有完整动作库，` +
+        `所以「从来没练过」这个名字集合不存在。\n` +
+        `能算的是反过来的那个：**哪些动作很久没练**（练过但最近一次很久以前）——问我就行。`,
+      retrieveMs: 0,
+      numPredict: 0,
+    };
+
+  const lines = r.items
+    .map((x, i) => `[${i + 1}] ${x.name}：最近一次 ${x.lastDate}，距今 ${x.daysAgo} 天，共练过 ${x.sessions} 次`)
+    .join("\n");
+
+  const cites: Citation[] = r.items
+    .filter((x) => x.docName)
+    .map((x, i) => ({
+      n: i + 1,
+      doc: x.docName,
+      date: x.lastDate,
+      label: `${x.docName} > ${x.name}`,
+      headingPath: [x.name],
+      snippet: `最近一次 ${x.lastDate}（${x.daysAgo} 天前），全库共 ${x.sessions} 次`,
+      score: 0,
+    }));
+
+  return {
+    route: "stale",
+    citations: cites,
+    k: cites.length,
+    prompt: null,
+    fixedAnswer:
+      `按「距今天数」排，最久没练的 ${r.items.length} 个：\n${lines}\n\n` +
+      `语料里共 ${r.total} 个动作，超过 30 天没练的有 **${r.staleCount}** 个（截至 ${r.refDate}）。\n` +
+      `注：这是遍历全部训练记录、对每个动作取最晚一次日期排出来的，不是从检索到的几段里挑的。`,
+    retrieveMs: 0,
+    numPredict: 0,
+  };
 }
 
 /* ─────────── 对比入口：这个月比上个月练得更多吗 ─────────── */
@@ -823,6 +906,9 @@ export function pick(question: string, k: number, noTools?: boolean): Plan | { e
   if (!noTools) {
     // 对比先于计数：「这个月比上个月练了几次」同时含「几次」，
     // 先判计数会只数本月，用户要的对比就没了
+    // 荒废先判：「哪些动作我从来没练过」含「没练」，但它和「很久没练」是两件事
+    const st = planStale(question);
+    if (st) return st;
     const cmp = planCompare(question);
     if (cmp) return cmp;
     const c = planCount(question);

@@ -665,6 +665,99 @@ function loadSessions(): SessIdx {
   return idx;
 }
 
+export interface StaleItem {
+  name: string;
+  lastDate: string;
+  /** 最近一次那节课的文档名，用来做引用 */
+  docName: string;
+  daysAgo: number;
+  /** 一共练过几次，用来区分「练过但很久没练」和「只练过一次」 */
+  sessions: number;
+}
+
+export interface StaleResult {
+  ok: boolean;
+  /** 按「距今天数」降序，最久没练的排前面 */
+  items: StaleItem[];
+  /** 达到阈值（默认 30 天）的一共几个 */
+  staleCount: number;
+  /** 语料里出现过的动作总数 */
+  total: number;
+  refDate: string;
+  summary: string;
+  reason?: string;
+}
+
+/**
+ * 「哪些动作我很久没练了」。
+ *
+ * 这是个**集合差 + 日期**的题：全集是语料里练过的动作，对每个取 `max(date)`，
+ * 再按「距今天数」排序。任何一段文字里都没有这个结果——检索给不了，
+ * 模型更算不了（它得先记住几百个动作的最近日期）。
+ *
+ * 注意它和「哪些动作我**从来**没练过」不是一回事：后者需要动作全集，
+ * 而语料里只有你练过的 136 个动作（`action_muscles.json` 是从训练记录反推的，
+ * 不是 free-exercise-db 的 876 条）。所以那个问题只能明说答不了，
+ * 不能拿这个结果冒充。
+ */
+export function staleExercises(
+  opts: { limit?: number; minDays?: number; refDate?: Date } = {}
+): StaleResult {
+  const { limit = 5, minDays = 30 } = opts;
+  const ref = opts.refDate ?? new Date();
+  const empty = (reason: string): StaleResult => ({
+    ok: false,
+    items: [],
+    staleCount: 0,
+    total: 0,
+    refDate: ymd(ref),
+    summary: "",
+    reason,
+  });
+
+  let l: ReturnType<typeof loadAll>;
+  try {
+    l = loadAll();
+  } catch (e) {
+    return empty(e instanceof Error ? e.message : "语料不可读");
+  }
+
+  const all: StaleItem[] = [];
+  for (const [name, arr] of l.byExercise) {
+    const dates = arr.map((x) => x.doc.date ?? x.doc.name.slice(0, 10)).sort();
+    const last = dates[dates.length - 1];
+    if (!last) continue;
+    const daysAgo = Math.max(0, Math.round((ref.getTime() - Date.parse(last)) / 86_400_000));
+    const lastDoc = arr.filter((x) => (x.doc.date ?? x.doc.name.slice(0, 10)) === last)[0];
+    all.push({
+      name,
+      lastDate: last,
+      docName: lastDoc?.doc.name ?? "",
+      daysAgo,
+      sessions: arr.length,
+    });
+  }
+  if (!all.length) return empty("语料里没有任何动作记录");
+
+  all.sort((a, b) => b.daysAgo - a.daysAgo);
+  const items = all.slice(0, limit);
+  const staleCount = all.filter((x) => x.daysAgo >= minDays).length;
+
+  const fmt = (x: StaleItem) => `${x.name} ${x.lastDate}（${x.daysAgo} 天前，共 ${x.sessions} 次）`;
+  return {
+    ok: true,
+    items,
+    staleCount,
+    total: all.length,
+    refDate: ymd(ref),
+    summary:
+      `语料里共 ${all.length} 个动作。距今超过 ${minDays} 天的有 ${staleCount} 个；` +
+      `最久没练的是：${items.map(fmt).join("；")}。\n` +
+      `这是遍历全部训练记录、对每个动作取最晚一次日期排出来的，不是从检索到的几段里挑的。` +
+      `注意：只能算「练过但很久没练」，算不出「从来没练过」——语料里没有完整动作库。`,
+  };
+}
+
 /**
  * 「最近一次 X 是什么时候」。
  *

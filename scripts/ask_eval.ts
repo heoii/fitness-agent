@@ -16,7 +16,7 @@ import { kbDir } from "./kb-dir";
 import { ask, type AskResult } from "../src/lib/answer";
 import { indexMeta } from "../src/lib/retrieve";
 
-type Kind = "answerable" | "absent" | "needs-math" | "reframe" | "aggregate";
+type Kind = "answerable" | "absent" | "needs-math" | "reframe" | "aggregate" | "stale";
 
 interface Q {
   id: string;
@@ -43,6 +43,8 @@ interface Q {
    * 不从工具输出抄——工具算错时判据要能跟着红。
    */
   expectNums?: number[];
+  /** stale 时，期望走哪条入口（用来抓「意图过宽」：问具体动作却答了全局排行） */
+  expectRoute?: "retrieve" | "trend" | "count" | "latest" | "compare" | "stale";
 }
 
 const QUESTIONS: Q[] = [
@@ -117,6 +119,31 @@ const QUESTIONS: Q[] = [
     kind: "aggregate",
     expectNums: [26],
     note: "单区间、无实体；旧版因为没有部位/动作直接不走工具",
+  },
+  // ——— 荒废：集合差 + 日期 ———
+  {
+    id: "H1",
+    q: "哪些动作我很久没练了",
+    kind: "stale",
+    expectRoute: "stale",
+    // 真值 2026-11-15：悍马上斜推胸只在 2025-08-05 那篇出现过一次
+    mustMention: ["悍马上斜推胸"],
+    note: "对每个动作取 max(date) 再排序，任何一段文字里都没有这个结果",
+  },
+  {
+    id: "H2",
+    q: "哪些动作我从来没练过",
+    kind: "stale",
+    expectRoute: "stale",
+    mustMention: ["动作库"],
+    note: "语料只有练过的 135 个动作，没有全集——必须明说列不出来，不能拿「很久没练」冒充",
+  },
+  {
+    id: "H3",
+    q: "硬拉多久没练了",
+    kind: "stale",
+    expectRoute: "latest",
+    note: "指定了动作就走 latest；第一版意图过宽，答的是「悍马上斜推胸 467 天」",
   },
   { id: "B3", q: "我第一次跑全马的完赛成绩是多少", kind: "absent" },
   { id: "B4", q: "2020 年我的深蹲最大重量是多少", kind: "absent", note: "语料从 2025 年开始" },
@@ -211,6 +238,21 @@ function aggregateOk(r: AskResult, expectNums: number[] = []): boolean {
   return expectNums.every((n) => got.includes(n));
 }
 
+/**
+ * 荒废类：集合差 + 日期。
+ *
+ * 两个判据缺一不可：
+ *   - **路由**：问「硬拉多久没练了」必须走 latest，不能走全局排行。
+ *     第一版没有这层判断，问硬拉答的是「悍马上斜推胸 467 天」——
+ *     答的是另一个问题，而列表看起来很像正确答案。
+ *   - **内容**：问「从来没练过」必须说清语料里没有动作全集。
+ */
+function staleOk(r: AskResult, q: Q): boolean {
+  if (!r.ok) return false;
+  if (q.expectRoute && r.meta.route !== q.expectRoute) return false;
+  return (q.mustMention ?? []).every((m) => r.answer.includes(m));
+}
+
 async function main() {
   kbDir(); // 触发 .env.local 加载（scripts/kb-dir.ts 在模块顶层做）
   // --only C 只跑 id 以 C 开头的题。调参时跑全量要 1 分钟，改一句 prompt 等一分钟太久，
@@ -254,7 +296,7 @@ async function main() {
    * 这不等于「空洞通过」：后者是判据压根没跑却报过（--only=C 那次），
    * 这里是**明确排除不适用的一类**，而且分母会跟着变小、看得见。
    */
-  const needsCite = ok.filter((x) => x.q.kind !== "aggregate");
+  const needsCite = ok.filter((x) => x.q.kind !== "aggregate" && x.q.kind !== "stale");
   const labelOkN = needsCite.filter((x) => x.labelOk).length;
   const answerable = rows.filter((x) => x.q.kind === "answerable" && x.r.ok);
   const citedN = answerable.filter((x) => x.r.check.refs.length > 0 && !x.r.check.noAnswer).length;
@@ -266,6 +308,8 @@ async function main() {
   const reframeN = reframe.filter((x) => reframeOk(x.r, x.q.mustMention)).length;
   const agg = rows.filter((x) => x.q.kind === "aggregate" && x.r.ok);
   const aggN = agg.filter((x) => aggregateOk(x.r, x.q.expectNums)).length;
+  const stale = rows.filter((x) => x.q.kind === "stale" && x.r.ok);
+  const staleN = stale.filter((x) => staleOk(x.r, x.q)).length;
 
   // 分母为 0 时写「未覆盖」而不是 0/0 然后算通过——--only=C 那次就是这么
   // 显示「✓ A–D 全过」的，实际上 A–D 一条都没跑。空洞通过比失败更危险。
@@ -277,6 +321,7 @@ async function main() {
   const E = `${frac(mathN, math.length)}（count 须报对数 / trend 须报双口径 / 否则须拒答）`;
   const F = `${frac(reframeN, reframe.length)}（必须指出「不是一回事」，且答到具体内容）`;
   const G = `${frac(aggN, agg.length)}（count/compare 路由 + 数字对真值）`;
+  const H = `${frac(staleN, stale.length)}（路由对 + 关键内容出现）`;
   const avg = (ok.reduce((s, x) => s + x.r.meta.ms.total, 0) / (ok.length || 1) / 1000).toFixed(1);
 
   console.log("\n" + "=".repeat(78));
@@ -287,14 +332,15 @@ async function main() {
   console.log(`E 要算数的走工具而非硬答    ${E}`);
   console.log(`F 前提有误时会纠正          ${F}`);
   console.log(`G 聚合类走工具且数对        ${G}`);
+  console.log(`H 荒废类路由与内容都对      ${H}`);
   console.log(`  平均端到端              ${avg} s（本机 7B，同步非流式）`);
 
   const groupOk = (n: number, d: number) => d === 0 || n === d;
   const pass = groupOk(invalidFree, ok.length) && groupOk(labelOkN, needsCite.length) &&
     groupOk(citedN, answerable.length) && groupOk(absentN, absent.length) && groupOk(mathN, math.length) &&
-    groupOk(reframeN, reframe.length) && groupOk(aggN, agg.length);
-  const covered = [ok.length > 0, needsCite.length > 0, answerable.length > 0, absent.length > 0, math.length > 0, reframe.length > 0, agg.length > 0].filter(Boolean).length;
-  console.log(`\n${pass ? "✓ 全过" : "✗ 有判据未过"}（覆盖 ${covered}/7 组判据）`);
+    groupOk(reframeN, reframe.length) && groupOk(aggN, agg.length) && groupOk(staleN, stale.length);
+  const covered = [ok.length > 0, needsCite.length > 0, answerable.length > 0, absent.length > 0, math.length > 0, reframe.length > 0, agg.length > 0, stale.length > 0].filter(Boolean).length;
+  console.log(`\n${pass ? "✓ 全过" : "✗ 有判据未过"}（覆盖 ${covered}/8 组判据）`);
 
   /*
    * 分类准确率 + 未达标明细。
@@ -310,10 +356,11 @@ async function main() {
     if (x.q.kind === "absent") return x.r.check.noAnswer;
     if (x.q.kind === "reframe") return reframeOk(x.r, x.q.mustMention);
     if (x.q.kind === "aggregate") return aggregateOk(x.r, x.q.expectNums);
+    if (x.q.kind === "stale") return staleOk(x.r, x.q);
     return mathOk(x.r, x.q.expectCount);
   };
   console.log("\n分类准确率");
-  for (const k of ["answerable", "absent", "needs-math", "reframe", "aggregate"] as Kind[]) {
+  for (const k of ["answerable", "absent", "needs-math", "reframe", "aggregate", "stale"] as Kind[]) {
     const g = rows.filter((x) => x.q.kind === k);
     if (!g.length) continue;
     const hit = g.filter(good).length;

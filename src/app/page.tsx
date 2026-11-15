@@ -36,7 +36,7 @@ interface Check {
   noAnswer: boolean;
 }
 
-type Route = "retrieve" | "trend" | "count" | "latest";
+type Route = "retrieve" | "trend" | "count" | "latest" | "compare" | "stale";
 
 interface View {
   answer: string;
@@ -68,6 +68,8 @@ const ROUTE_LABEL: Record<Route, string> = {
   trend: "数值入口 · 趋势（算好再答）",
   count: "数值入口 · 计数（遍历全库数）",
   latest: "数值入口 · 定位（取最晚一条）",
+  compare: "数值入口 · 对比（两个区间，纯代码算）",
+  stale: "数值入口 · 荒废（每个动作取最晚日期）",
 };
 
 /** 把 [1] [2] 渲染成可点的角标，其余原样 */
