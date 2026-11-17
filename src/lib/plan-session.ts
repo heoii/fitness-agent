@@ -71,6 +71,8 @@ interface PlanAction {
   rest?: number;
   toFailure?: boolean;
   warmupText?: string;
+  /** 引擎的逐级热身：[{w, reps, hot}]，不占正式组数 */
+  warmup?: { w: number; reps: number; hot?: boolean }[];
   bodyweight?: boolean;
   closingRule?: string;
 }
@@ -116,6 +118,12 @@ function buildPlanData(tiers: TierPlan[], date: string): PlanData {
       rest: a.rest ? `${a.rest}s` : "",
       fail: !!a.toFailure,
       warmup: a.warmupText || "",
+      // 逐级热身单独给出来：小程序按「2 组：22.5×8 / 30×5」显示。
+      // 引擎本来就有这个数组，之前只取了拼好的文本，表格里看不出有几组。
+      warmups: (a.warmup || []).map((x) => ({
+        weight: Number.isInteger(x.w) ? String(x.w) : String(x.w),
+        reps: String(x.reps),
+      })),
     }));
     return {
       tier: t.tier,
@@ -135,7 +143,7 @@ function buildPlanData(tiers: TierPlan[], date: string): PlanData {
       : "",
     dims: (first.dimensions || []).map((d) => ({ name: d.name, level: d.level || "", detail: d.detail || "" })),
     tiers: tierData,
-    note: "三档自己挑一档；只在对话里给计划，不写进练练 App。热身与渐进已含在重量区间里。",
+    note: "三档自己挑一档，点下方按钮才会写进练练（不点就只在这里看）。热身组不占正式组数；自重、面拉与小重量动作不另设热身。",
   };
 }
 

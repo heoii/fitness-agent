@@ -102,7 +102,10 @@ export interface PlanRow {
   weight: string;
   rest: string;
   fail: boolean;
+  /** 兼容旧字段：拼好的一行文本 */
   warmup: string;
+  /** 逐级热身（引擎原始结构），表格据此一行一组地显示 */
+  warmups: { weight: string; reps: string }[];
 }
 
 export interface PlanTierData {
