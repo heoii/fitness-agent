@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ask, askStream, ASK_K } from "@/lib/answer";
 import { indexMeta } from "@/lib/retrieve";
+import { authGuard } from "@/lib/auth";
 
 /**
  * POST /api/ask —— W6：检索增强问答（同步版）
@@ -19,11 +20,14 @@ import { indexMeta } from "@/lib/retrieve";
  * GET /api/ask 返回索引状态，方便确认「服务起来时用的是哪份语料」。
  */
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  // 隧道来的请求（带 CF 头）必须有 token；本机网页直连豁免（2026-11-17）
+  const denied = authGuard(req);
+  if (denied) return denied;
   try {
     const m = indexMeta();
-    // 只回规模与耗时，**不回 dir** —— 那个字段是 `01 每日记录` 的绝对路径，
-    // 里面带本机用户名和坚果云邮箱。本地跑无所谓，但这一层迟早要部署出去。
+    // 只回规模与耗时，**不回 dir** —— 那个字段是每日记录目录的绝对路径，
+    // 会暴露本机目录结构与账号信息。本地跑无所谓，但这一层迟早要部署出去。
     return NextResponse.json({
       ok: true,
       index: { chunks: m.chunks, docs: m.docs, builtMs: Number(m.builtMs.toFixed(0)), builtAt: m.builtAt },
@@ -37,6 +41,10 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  // 守卫放在解析 body 与 stream 分支之前：401 时不会先吐 SSE 的 cites
+  const denied = authGuard(req);
+  if (denied) return denied;
+
   let q = "";
   let k = ASK_K;
   try {
@@ -55,8 +63,13 @@ export async function POST(req: NextRequest) {
   // 流式返回一串事件，硬塞进一个形状里会让两边都难用。
   if (new URL(req.url).searchParams.get("stream") === "1") return sseStream(q.trim(), k, req.signal);
 
-  const result = await ask(q.trim(), { k });
-  return NextResponse.json(result);
+  // 原来这里是裸调 ask()，缺 KB_DIR/模型挂了会直接 500，和本文件「永不 500」的约定不符
+  try {
+    const result = await ask(q.trim(), { k });
+    return NextResponse.json(result);
+  } catch (e) {
+    return NextResponse.json({ ok: false, reason: e instanceof Error ? e.message : "生成失败" });
+  }
 }
 
 /**

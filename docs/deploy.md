@@ -155,6 +155,40 @@ OLLAMA_MODEL=qwen2.5:7b-instruct
 
 ---
 
+## 五·五、应用层 token + Cloudflare 隧道（2026-11-17，给小程序真机用）
+
+小程序真机连不到 Mac 的 `127.0.0.1`，所以走「云函数 → Cloudflare quick tunnel → 回环」这条链。
+应用本身仍只听回环，**不改成 `0.0.0.0`**；TLS 由 Cloudflare 在隧道那一层终结。
+
+**鉴权判据不是来源 IP**：隧道也在同一台 Mac 上转发到回环，按 IP 豁免会把公网请求一起放行。
+实际判据是「有没有 Cloudflare 注入的头」（`cf-connecting-ip` / `cf-ray`）：
+本机浏览器直连没有这些头 → 放行，网页零改动；经隧道进来 → 必须带 `x-fit-token` 且等于
+`FIT_AGENT_TOKEN`，否则 401。`FIT_AGENT_TOKEN` 未配置时隧道请求一律 401（fail closed）。
+两个 API 都守：`/api/ask`（含 `?stream=1`）与 `/api/extract`（拒绝体用 `raw` 字段）。
+
+```bash
+# .env.local 加一行（值自己生成，不进仓、不贴对话）
+# FIT_AGENT_TOKEN=<openssl rand -hex 24 的输出>
+
+brew install cloudflared
+cloudflared tunnel --url http://127.0.0.1:3000      # 保持终端开着；URL 重启会变
+
+# 本机验收（必须绕过环境代理，否则 502 是代理伪造的）
+curl -s --noproxy '*' http://127.0.0.1:3000/api/ask                       # 本机豁免 → ok
+curl -s --noproxy '*' -i -H 'cf-connecting-ip: 1.2.3.4' http://127.0.0.1:3000/api/ask   # 401
+curl -s --noproxy '*' -H 'cf-connecting-ip: 1.2.3.4' -H "x-fit-token: $FIT_AGENT_TOKEN" \
+  -X POST http://127.0.0.1:3000/api/ask -H 'content-type: application/json' \
+  -d '{"q":"上次练腿是哪天？"}'                                            # 完整答案
+```
+
+小程序侧的云函数 `askFit` 持有同一 token 与隧道 URL（环境变量 `FIT_AGENT_TOKEN` /
+`FIT_AGENT_BASE_URL`），超时设 60s；隧道 URL 变化只需更新云函数环境变量。
+日志禁记 token、问题正文、完整 URL；token 轮换要两边同步改，否则全部 401。
+
+**索引新鲜度**：`isCurrent()` 只比目录字符串，不比文件 mtime——写完当天记录必须
+`./scripts/service.sh restart`（launchd 不可用时在 `start-once` 标签页 Ctrl-C 后重跑），
+否则新记录查不到。
+
 ## 六、没做、也没验证的
 
 按「影响面」排序，别把下面这些当成已完成：
@@ -162,7 +196,8 @@ OLLAMA_MODEL=qwen2.5:7b-instruct
 1. **Dockerfile 没写**。本机没有 docker，写了也验证不了，就不写一份「看起来能跑」的。
    有了 docker 之后要补的验证：多阶段构建、`node:22-alpine` 下 `next start` 起得来、
    卷挂载后索引能建、镜像里 `private/` 和 `.env.local` 都在 `.dockerignore` 里。
-2. **没有 TLS**。走反向代理时在那一层解决。
+2. **应用本身没有 TLS**。走 Cloudflare 隧道时由 CF 终结（见五·五）；本机回环仍是 HTTP，
+   不对外暴露。
 3. ~~没有进程守护~~ **配置已写，但未验证生效**（W15）：`launchd` plist 就位、
    `KeepAlive` 开着，但本会话注册不了（见第三节·五）。**别把它当成已上线。**
 4. **首次请求会慢**：索引 349 ms + 模型冷加载 ~1.5 s，之后单题热态 1.1–1.6 s。

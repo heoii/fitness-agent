@@ -7,6 +7,7 @@ import {
   buildPrompt,
   validateRaw,
 } from "@/lib/extract";
+import { authGuard } from "@/lib/auth";
 
 /**
  * POST /api/extract  —— W2：自然语言/训练记录文本 → 结构化 JSON（Zod 校验）
@@ -20,6 +21,10 @@ import {
  */
 
 export async function POST(req: NextRequest) {
+  // 与 /api/ask 同一道闸；失败体要用本路由自己的 raw 字段（2026-11-17）
+  const denied = authGuard(req, "raw");
+  if (denied) return denied;
+
   let text: string;
   try {
     const body = await req.json();
