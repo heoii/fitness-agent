@@ -22,7 +22,14 @@ export async function POST(req: NextRequest) {
     date?: string;
     tier?: string;
     dryRun?: boolean;
-    actions?: { name?: string; sets?: number; reps?: string; weight?: string; rest?: string }[];
+    actions?: {
+      name?: string;
+      sets?: number;
+      reps?: string;
+      weight?: string;
+      rest?: string;
+      warmups?: { weight?: string; reps?: string }[];
+    }[];
   };
   try {
     body = await req.json();
@@ -45,6 +52,11 @@ export async function POST(req: NextRequest) {
       reps: String(a.reps ?? "8"),
       weight: String(a.weight ?? ""),
       rest: String(a.rest ?? ""),
+      warmups: Array.isArray(a.warmups)
+        ? a.warmups
+            .filter((w) => w && w.weight != null && String(w.weight) !== "")
+            .map((w) => ({ weight: String(w.weight), reps: String(w.reps ?? "8") }))
+        : [],
     }));
 
   // 标题：日期 + 档位，练练里一眼知道是哪次排的（≤15 字，留余量）

@@ -105,6 +105,8 @@ export interface SaveAction {
   reps: string;
   weight: string;
   rest?: string;
+  /** 逐级热身；不传就只有正式组（旧调用方兼容） */
+  warmups?: { weight: string; reps: string }[];
 }
 
 export interface SaveResult {
@@ -113,6 +115,8 @@ export interface SaveResult {
   skipped: string[];
   dayStr: string;
   reason?: string;
+  /** dryRun 时回显组装结果：每个动作几组、其中几组是热身。用来验证热身有没有挂上 */
+  preview?: { name: string; groups: number; hot: number }[];
 }
 
 /**
@@ -143,17 +147,32 @@ export async function saveScheduledWorkout(
     const w = lowerWeight(a.weight);
     const reps = String(a.reps || "8");
     const n = Math.max(1, Math.min(20, Number(a.sets) || 1));
+    // 热身组要和正式组一起塞进 groups，并用 flag:"hot" 标记——这是练练自己的口径
+    // （引擎 is_warmup 就是认这个字段）。少了它，App 里只看到正式组，热身等于没写。
+    // 热身排在正式组前面，跟实际练的顺序一致；组间休息短，固定 60s。
+    const warmGroups = (a.warmups || [])
+      .filter((x) => x && String(x.weight) !== "")
+      .map((x) => ({
+        weight: String(x.weight),
+        reps: String(x.reps || "8"),
+        realRestSeconds: 60,
+        combGroups: [] as unknown[],
+        flag: "hot",
+      }));
     built.push({
       actionId,
       name: a.name,
       weightUnit: "kg",
       restSeconds: rest,
-      groups: Array.from({ length: n }, () => ({
-        weight: w, // 自重动作给 ""，绝不填 0
-        reps,
-        realRestSeconds: rest,
-        combGroups: [],
-      })),
+      groups: [
+        ...warmGroups,
+        ...Array.from({ length: n }, () => ({
+          weight: w, // 自重动作给 ""，绝不填 0
+          reps,
+          realRestSeconds: rest,
+          combGroups: [] as unknown[],
+        })),
+      ],
       combActions: [],
     });
   }
@@ -161,9 +180,15 @@ export async function saveScheduledWorkout(
   if (!built.length) {
     return { ok: false, saved: 0, skipped, dayStr, reason: "动作一个都没匹配上练练的动作库" };
   }
-  // 干跑：只回报能匹配几个，不落库。用来验证名字映射，也不在日历里留测试垃圾。
+  // 干跑：只回报能匹配几个、每个动作组装出几组（含几组热身），不落库。
+  // 用来验证名字映射与热身挂载，也不在日历里留测试垃圾。
   if (dryRun) {
-    return { ok: true, saved: built.length, skipped, dayStr, reason: "dryRun（未写入）" };
+    const preview = built.map((b) => {
+      const o = b as { name?: string; groups?: { flag?: string }[] };
+      const gs = o.groups || [];
+      return { name: String(o.name || ""), groups: gs.length, hot: gs.filter((g) => g.flag === "hot").length };
+    });
+    return { ok: true, saved: built.length, skipped, dayStr, reason: "dryRun（未写入）", preview };
   }
 
   const r = await fetch(base + "/api/v1/ai/training/scheduled-workouts", {
