@@ -57,6 +57,10 @@ PRIVATE_PATTERNS = (
     (r"1[3-9]\d{9}(?!\d)", "手机号", None),
     (r"sk-[A-Za-z0-9_-]{20,}", "疑似 API key", None),
     (r"gh[pousr]_[A-Za-z0-9]{20,}", "GitHub token", None),
+    # 2026-11-17 补：本仓是 PUBLIC，裸 hex token（openssl rand -hex 24 = 48 位）
+    # 上面靠前缀的规则一个都认不出。全仓实测 0 处命中，加这条不会误报。
+    (r"(?<![0-9a-fA-F])[0-9a-fA-F]{32,}(?![0-9a-fA-F])",
+     "裸 hex 密钥（32+ 位，疑似 token）", None),
     # ↓ 从私有仓（personal-system）拷数据文件过来时，上面那些都扫不出来，靠这几条
     (r'"ledger"\s*:', "账本数据（ledger）", (".json",)),
     (r'"(account|merchant|amount)"\s*:\s*"', "账本字段（account/merchant/amount）", (".json",)),
