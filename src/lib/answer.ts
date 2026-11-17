@@ -61,6 +61,8 @@ export interface AskResult {
   answer: string;
   citations: Citation[];
   check: CitationCheck;
+  /** 排计划时才有：结构化三档，供小程序画表格；其余情况为 null/缺省 */
+  plan?: PlanData | null;
   /** 出错时的原因，ok=false 才有 */
   reason?: string;
   meta: {
@@ -86,9 +88,46 @@ export type Route = "retrieve" | "trend" | "count" | "latest" | "compare" | "sta
  * 上一版把路由写在 `tryTrend/tryCount` 里、生成紧跟着发生，于是流式要么复制一遍
  * 判断（两份必然漂移），要么把流式硬塞进同步函数。路由和生成是两件事，分开。
  */
+/**
+ * 排计划的结构化结果（2026-11-17）。
+ *
+ * 为什么不再只给一段长文本：手机上那串「动作 组×次 @ 重量，组间 120s…」堆在一起
+ * 根本读不动，用户要的是表格。数字仍然全部由引擎算，这个结构只是把同一份结果
+ * 按行列摆好，**不新增任何计算**。
+ */
+export interface PlanRow {
+  name: string;
+  sets: number;
+  reps: string;
+  weight: string;
+  rest: string;
+  fail: boolean;
+  warmup: string;
+}
+
+export interface PlanTierData {
+  tier: string;
+  isDefault: boolean;
+  desc: string;
+  totalSets: number;
+  rows: PlanRow[];
+}
+
+export interface PlanData {
+  date: string;
+  judge: string;
+  statusLine: string;
+  parts: string;
+  dims: { name: string; level: string; detail: string }[];
+  tiers: PlanTierData[];
+  note: string;
+}
+
 export interface Plan {
   route: Route;
   citations: Citation[];
+  /** 结构化计划；只有 route=plan 时存在。文本版 fixedAnswer 仍保留，给网页端与降级用 */
+  planData?: PlanData;
   /** 引用条数上界，`checkAnswer` 用它判越界 */
   k: number;
   /** null = 不需要模型（结果已经确定，比如区间内一条记录都没有） */
@@ -988,6 +1027,8 @@ export async function ask(
         answer: sp.fixedAnswer ?? "",
         citations: sp.citations,
         check: checkAnswer(sp.fixedAnswer ?? "", sp.k),
+        // 结构化计划：小程序按表格渲染，网页端可继续用 answer 文本
+        plan: sp.planData || null,
         meta: {
           model: OLLAMA_MODEL,
           ms: { retrieve: sp.retrieveMs, generate: 0, total: Date.now() - t0 },

@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import fs from "node:fs/promises";
 
-import type { Citation, Plan, Route } from "./answer";
+import type { Citation, Plan, PlanData, PlanTierData, Route } from "./answer";
 
 const execFileAsync = promisify(execFile);
 
@@ -95,6 +95,48 @@ function fmtWeight(a: PlanAction): string {
   const hi = a.weightRange?.[1];
   const n = (x: number) => (Number.isInteger(x) ? String(x) : x.toFixed(1));
   return lo != null && hi != null && lo !== hi ? `${n(lo)}–${n(hi)}kg` : `${n(a.weight)}kg`;
+}
+
+/**
+ * 结构化版：同一份引擎结果，按「判档四维 + 三档动作行」摆好，给小程序画表格。
+ * 与 renderTiers 共用同一个 tiers 输入，所以两边数字必然一致。
+ * 这里只做搬运和格式化，不做任何新的判断或换算。
+ */
+function buildPlanData(tiers: TierPlan[], date: string): PlanData {
+  const first = tiers[0];
+  const def = tiers.find((t) => t.tier === first.judgedTier) || first;
+  const cnt = first.counts;
+
+  const tierData: PlanTierData[] = tiers.map((t) => {
+    const rows = (t.actions || []).map((a) => ({
+      name: a.name,
+      sets: Number(a.sets) || 0,
+      reps: String(a.reps ?? ""),
+      weight: fmtWeight(a),
+      rest: a.rest ? `${a.rest}s` : "",
+      fail: !!a.toFailure,
+      warmup: a.warmupText || "",
+    }));
+    return {
+      tier: t.tier,
+      isDefault: t === def,
+      desc: t.tierDesc || "",
+      totalSets: rows.reduce((s, r) => s + r.sets, 0),
+      rows,
+    };
+  });
+
+  return {
+    date,
+    judge: def.tier,
+    statusLine: cnt ? `${first.status} · 红 ${cnt.red} / 黄 ${cnt.yellow}（${cnt.dimensions} 维）` : first.status,
+    parts: first.session?.name
+      ? first.session.name + (first.session.daysSinceLast != null ? ` · 距上次 ${first.session.daysSinceLast} 天` : "")
+      : "",
+    dims: (first.dimensions || []).map((d) => ({ name: d.name, level: d.level || "", detail: d.detail || "" })),
+    tiers: tierData,
+    note: "三档自己挑一档；只在对话里给计划，不写进练练 App。热身与渐进已含在重量区间里。",
+  };
 }
 
 /** 把三档渲染成纯文本。数字全来自引擎；不用 [n]，免得被引用校验当成引用。 */
@@ -195,6 +237,7 @@ export async function tryPlanSession(question: string): Promise<
       k: 0,
       prompt: null,
       fixedAnswer: answer,
+      planData: buildPlanData(tiers, date),
       retrieveMs: Date.now() - t0,
       numPredict: 0,
     };
