@@ -26,6 +26,7 @@ import {
   type TrendResult,
 } from "./tools";
 import { OLLAMA_MODEL, OLLAMA_URL } from "./extract";
+import { tryPlanSession } from "./plan-session";
 
 export const ASK_NUM_PREDICT = 260;
 export const ASK_TIMEOUT_MS = 90_000;
@@ -70,12 +71,13 @@ export interface AskResult {
      *  count = 计数工具（遍历全语料数出来的次数）
      *  latest = 定位工具（遍历全语料取的最晚一条）
      *  compare = 区间对比（两个区间的次数与每周频率，答案全部由代码算出）
-     *  stale = 最久没练（对每个动作取最晚日期再排序，答案由代码算出） */
+     *  stale = 最久没练（对每个动作取最晚日期再排序，答案由代码算出）
+     *  plan = 排计划（调本机排课引擎出三档，答案全部由代码算出、不过模型） */
     route: Route;
   };
 }
 
-export type Route = "retrieve" | "trend" | "count" | "latest" | "compare" | "stale";
+export type Route = "retrieve" | "trend" | "count" | "latest" | "compare" | "stale" | "plan";
 
 /**
  * 「这次问答该怎么答」的决策结果。
@@ -964,6 +966,38 @@ export async function ask(
   const k = opts.k ?? ASK_K;
   const t0 = Date.now();
 
+  // 排计划先判：它是异步的（调本机 Python 引擎），不能塞进同步的 pick()。
+  // 命中就用引擎算好的答案（不过模型）；失败直接报错，绝不回落检索——
+  // 回落会拿一段历史文字冒充计划，答非所问。
+  if (!opts.noTools) {
+    const session = await tryPlanSession(question);
+    if (session) {
+      if ("error" in session) {
+        return {
+          ok: false,
+          answer: "",
+          citations: [],
+          check: { refs: [], invalid: [], unused: [], noAnswer: false },
+          reason: session.error,
+          meta: { model: OLLAMA_MODEL, ms: { retrieve: 0, generate: 0, total: Date.now() - t0 }, k, route: "plan" },
+        };
+      }
+      const sp = session.plan;
+      return {
+        ok: true,
+        answer: sp.fixedAnswer ?? "",
+        citations: sp.citations,
+        check: checkAnswer(sp.fixedAnswer ?? "", sp.k),
+        meta: {
+          model: OLLAMA_MODEL,
+          ms: { retrieve: sp.retrieveMs, generate: 0, total: Date.now() - t0 },
+          k: sp.k,
+          route: sp.route,
+        },
+      };
+    }
+  }
+
   const picked = pick(question, k, opts.noTools);
   if ("error" in picked) {
     return {
@@ -1110,6 +1144,29 @@ export async function* askStream(
 ): AsyncGenerator<AskEvent> {
   const k = opts.k ?? ASK_K;
   const t0 = Date.now();
+
+  // 与 ask() 同一份判断（tryPlanSession），保证网页与脚本表现一致。
+  if (!opts.noTools) {
+    const session = await tryPlanSession(question);
+    if (session) {
+      if ("error" in session) {
+        yield { type: "error", reason: session.error };
+        return;
+      }
+      const sp = session.plan;
+      const fixed = sp.fixedAnswer ?? "";
+      yield { type: "cites", citations: sp.citations, route: sp.route, k: sp.k, retrieveMs: sp.retrieveMs, model: OLLAMA_MODEL };
+      yield { type: "token", text: fixed };
+      yield {
+        type: "done",
+        answer: fixed,
+        check: checkAnswer(fixed, sp.k),
+        ms: { retrieve: sp.retrieveMs, generate: 0, total: Date.now() - t0 },
+        route: sp.route,
+      };
+      return;
+    }
+  }
 
   const picked = pick(question, k, opts.noTools);
   if ("error" in picked) {

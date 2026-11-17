@@ -38,7 +38,7 @@ interface Check {
   noAnswer: boolean;
 }
 
-type Route = "retrieve" | "trend" | "count" | "latest" | "compare" | "stale";
+type Route = "retrieve" | "trend" | "count" | "latest" | "compare" | "stale" | "plan";
 
 interface View {
   answer: string;
@@ -63,6 +63,7 @@ const EXAMPLES = [
   "深蹲最近在涨还是在跌",
   "我这个月一共练了几次腿",
   "我 2019 年的体脂率是多少",
+  "帮我排今天的训练计划",
 ];
 
 const ROUTE_LABEL: Record<Route, string> = {
@@ -72,6 +73,7 @@ const ROUTE_LABEL: Record<Route, string> = {
   latest: "数值入口 · 定位（取最晚一条）",
   compare: "数值入口 · 对比（两个区间，纯代码算）",
   stale: "数值入口 · 荒废（每个动作取最晚日期）",
+  plan: "排计划 · 三档（排课引擎算好，不过模型）",
 };
 
 /** 把 [1] [2] 渲染成可点的角标，其余原样 */
