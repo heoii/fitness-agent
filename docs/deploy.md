@@ -185,6 +185,26 @@ curl -s --noproxy '*' -H 'cf-connecting-ip: 1.2.3.4' -H "x-fit-token: $FIT_AGENT
 `FIT_AGENT_BASE_URL`），超时设 60s；隧道 URL 变化只需更新云函数环境变量。
 日志禁记 token、问题正文、完整 URL；token 轮换要两边同步改，否则全部 401。
 
+**云函数环境变量怎么填两个**：开发者工具 → 云开发 → 云函数 → `askFit` → 函数配置 →
+环境变量，是「一行一个 key-value」的列表，不是把多个变量塞进同一个输入框。界面默认
+只渲染一行，填完点「新增环境变量 / +」才出现第二行——这就是看起来"只能配一个"的原因。
+官方配置结构里 `environment` 本身就是 `Array of EnvVar`，没有条数上限。本项目要填两条：
+
+| key | value |
+|---|---|
+| `FIT_AGENT_BASE_URL` | `https://<随机串>.trycloudflare.com`（隧道根地址，不带 `/api/ask`、不带尾斜杠）|
+| `FIT_AGENT_TOKEN` | 本机 `.env.local` 里那串 48 位随机串 |
+
+`cloudfunctions/askFit/index.js` 分别读 `process.env.FIT_AGENT_BASE_URL` 与
+`process.env.FIT_AGENT_TOKEN`，且有 `if (!BASE || !TOKEN)` 检查——缺任一条就直接返回
+"云函数还没配置 FIT_AGENT_BASE_URL / FIT_AGENT_TOKEN"。所以两条必须同时存在，
+key 必须一字不差（全大写、下划线，无 `export`、无引号、无 `KEY=value` 整串写进 value）。
+
+**验证两条都生效**：① 界面上确认两行都在；② 云函数「测试」面板入参
+`{"q":"上次练腿是哪天？"}`，能返回答案与出处即两条都读到了；③ 反向验证——删掉任一行
+应返回"云函数还没配置..."，只改错 token 那行的值应返回"鉴权失败：云函数 token 与本机
+不一致"。改完配置重新部署（或按提示等待生效）再测。
+
 **索引新鲜度**：`isCurrent()` 只比目录字符串，不比文件 mtime——写完当天记录必须
 `./scripts/service.sh restart`（launchd 不可用时在 `start-once` 标签页 Ctrl-C 后重跑），
 否则新记录查不到。
