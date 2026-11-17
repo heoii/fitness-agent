@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authGuard } from "@/lib/auth";
 import { saveScheduledWorkout } from "@/lib/keepstrong";
+import { triggerPublish, updateSavedLine, type Verdict } from "@/lib/kb-writer";
 
 /**
  * POST /api/save-plan —— 把「用户在小程序里选中的那一档」写进练练日历（2026-11-17）
@@ -22,6 +23,11 @@ export async function POST(req: NextRequest) {
     date?: string;
     tier?: string;
     dryRun?: boolean;
+    // 判档录入页带的原始输入与结论（2026-11-17）。只有带了 checkin 才写知识库，
+    // 历史页那条老入口不带，行为保持原样。
+    checkin?: Record<string, unknown>;
+    verdict?: Verdict;
+    tiers?: { tier: string; totalSets: number }[];
     actions?: {
       name?: string;
       sets?: number;
@@ -64,7 +70,20 @@ export async function POST(req: NextRequest) {
 
   try {
     const r = await saveScheduledWorkout(date, title, actions, !!body.dryRun);
-    return NextResponse.json(r);
+    if (!r.ok || body.dryRun) return NextResponse.json(r);
+
+    // 判档的写入在「确认录入」那一步已经做完了（/api/save-checkin）。
+    // 这里只补一行执行结果——不重复写判档块，也不碰 frontmatter。
+    const note = await updateSavedLine(date, {
+      tier: tier || "训练",
+      saved: r.saved,
+      dayStr: r.dayStr,
+      skipped: r.skipped,
+    });
+    // 行里多了这一条也要让云端的 markdown 快照跟上，否则首页那份还是旧的
+    const publish = note.ok ? triggerPublish() : { started: false };
+
+    return NextResponse.json({ ...r, kb: note, publish });
   } catch (e) {
     return NextResponse.json({
       ok: false,

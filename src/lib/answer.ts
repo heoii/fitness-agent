@@ -120,6 +120,10 @@ export interface PlanData {
   date: string;
   judge: string;
   statusLine: string;
+  /** 引擎给的状态短语（如「中度疲劳」）；写知识库时与 counts 拼成判档行 */
+  status?: string;
+  /** 红/黄/维度数；写知识库时用，避免前端正则拆 statusLine */
+  counts?: { red: number; yellow: number; dimensions: number };
   parts: string;
   dims: { name: string; level: string; detail: string }[];
   tiers: PlanTierData[];
@@ -1003,7 +1007,7 @@ export function pick(question: string, k: number, noTools?: boolean): Plan | { e
  */
 export async function ask(
   question: string,
-  opts: { k?: number; noTools?: boolean } = {}
+  opts: { k?: number; noTools?: boolean; checkin?: import("./plan-session").CheckinInput } = {}
 ): Promise<AskResult> {
   const k = opts.k ?? ASK_K;
   const t0 = Date.now();
@@ -1012,7 +1016,9 @@ export async function ask(
   // 命中就用引擎算好的答案（不过模型）；失败直接报错，绝不回落检索——
   // 回落会拿一段历史文字冒充计划，答非所问。
   if (!opts.noTools) {
-    const session = await tryPlanSession(question);
+    // checkin：小程序录入的 5 项。给了就直接判档（请求体优先），
+    // 没给才回落到读当天健康记录——旧入口（网页/脚本）行为不变。
+    const session = await tryPlanSession(question, { checkin: opts.checkin });
     if (session) {
       if ("error" in session) {
         return {

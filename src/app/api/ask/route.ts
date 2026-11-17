@@ -47,10 +47,21 @@ export async function POST(req: NextRequest) {
 
   let q = "";
   let k = ASK_K;
+  let checkin: Record<string, unknown> | undefined;
   try {
     const body = await req.json();
     q = typeof body?.q === "string" ? body.q : "";
     if (typeof body?.k === "number" && body.k >= 1 && body.k <= 10) k = Math.floor(body.k);
+    // 小程序录入的判档 5 项（2026-11-17）：带了就用它判档，不带才读当天健康记录。
+    // 只挑认识的键，不让请求体往引擎里塞任意字段。
+    if (body?.checkin && typeof body.checkin === "object") {
+      const c = body.checkin as Record<string, unknown>;
+      const picked: Record<string, unknown> = {};
+      for (const key of ["sleep_hours", "deep_sleep_min", "resting_hr", "fatigue", "soreness", "soreness_part"]) {
+        if (c[key] !== undefined && c[key] !== null && c[key] !== "") picked[key] = c[key];
+      }
+      if (Object.keys(picked).length) checkin = picked;
+    }
   } catch {
     return NextResponse.json({ ok: false, reason: "请求体不是合法 JSON" }, { status: 200 });
   }
@@ -65,7 +76,7 @@ export async function POST(req: NextRequest) {
 
   // 原来这里是裸调 ask()，缺 KB_DIR/模型挂了会直接 500，和本文件「永不 500」的约定不符
   try {
-    const result = await ask(q.trim(), { k });
+    const result = await ask(q.trim(), { k, checkin: checkin as never });
     return NextResponse.json(result);
   } catch (e) {
     return NextResponse.json({ ok: false, reason: e instanceof Error ? e.message : "生成失败" });

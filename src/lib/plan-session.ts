@@ -138,6 +138,10 @@ function buildPlanData(tiers: TierPlan[], date: string): PlanData {
     date,
     judge: def.tier,
     statusLine: cnt ? `${first.status} · 红 ${cnt.red} / 黄 ${cnt.yellow}（${cnt.dimensions} 维）` : first.status,
+    // 分开给：小程序写知识库时要拼「**判档：X**（状态 · 红N 黄N）」，直接拿这三个字段，
+    // 不用去正则拆 statusLine（拆错了会把结论写歪）。
+    status: first.status || "",
+    counts: cnt ? { red: cnt.red, yellow: cnt.yellow, dimensions: cnt.dimensions } : undefined,
     parts: first.session?.name
       ? first.session.name + (first.session.daysSinceLast != null ? ` · 距上次 ${first.session.daysSinceLast} 天` : "")
       : "",
@@ -191,6 +195,45 @@ function renderTiers(tiers: TierPlan[]): string {
   ].join("\n");
 }
 
+/**
+ * 小程序录入的判档值（2026-11-17）。
+ *
+ * 字段名与引擎 checkin JSON 不完全一样：深睡录的是**分钟**（引擎要的就是分钟），
+ * 但知识库里存的是 `deep_sleep_pct`——换算只在「写回 md」那一步做，判档这一路不换算。
+ * 体重/体脂**不参与判档**，只随请求带过来、由 kb-writer 写进记录，别让它们进引擎。
+ */
+export interface CheckinInput {
+  sleep_hours?: number | string;
+  deep_sleep_min?: number | string;
+  resting_hr?: number | string;
+  fatigue?: number | string;
+  soreness?: number | string;
+  soreness_part?: string;
+  weight_kg?: number | string;
+  body_fat_pct?: number | string;
+}
+
+/** 判档只用这 5 维；少于 2 维不下结论（一个数就敢判档比报错更危险）。 */
+const CHECKIN_DIMS = ["sleep_hours", "deep_sleep_min", "resting_hr", "fatigue", "soreness"] as const;
+
+function numOrNull(v: unknown): number | null {
+  if (v === "" || v === null || v === undefined) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** 归一化外部录入：只留引擎认识的键，丢弃空值。 */
+export function normalizeCheckin(input: CheckinInput | undefined): Record<string, number | string> {
+  const out: Record<string, number | string> = {};
+  if (!input) return out;
+  for (const k of CHECKIN_DIMS) {
+    const n = numOrNull(input[k]);
+    if (n !== null) out[k] = n;
+  }
+  if (input.soreness_part) out.soreness_part = String(input.soreness_part).slice(0, 20);
+  return out;
+}
+
 /** 调 checkin.py 拿当日状态（含深睡百分比→分钟的换算），不落任何文件。 */
 async function readCheckin(date: string): Promise<Record<string, unknown>> {
   const root = kbRoot();
@@ -203,6 +246,22 @@ async function readCheckin(date: string): Promise<Record<string, unknown>> {
   const ck = JSON.parse(stdout) as Record<string, unknown>;
   if (!ck || !Object.keys(ck).length) throw new Error("今天的健康记录还没有可判档的数据");
   return ck;
+}
+
+/**
+ * 判档输入：**请求体优先，md 兜底**（2026-11-17）。
+ *
+ * 为什么必须改成这样：小程序录入的值如果还要先落 md 才能被判档，就等于
+ * 「不写知识库就没法判档」，跟「录入就直接出三档」冲突。
+ * 反过来，网页端/脚本不带 checkin 时应保持旧行为（读当天健康记录），否则一次改动
+ * 会把已有的排计划入口全弄坏。
+ */
+async function resolveCheckin(date: string, override?: CheckinInput): Promise<Record<string, unknown>> {
+  const given = normalizeCheckin(override);
+  const dims = CHECKIN_DIMS.filter((k) => k in given).length;
+  if (dims >= 2) return given;
+  if (dims === 1) throw new Error("判档至少要两个维度：只填一个数给不出可信结论");
+  return readCheckin(date);
 }
 
 /** 调排课引擎出三档。checkin 走系统临时目录——绝不写进代码仓。 */
@@ -227,14 +286,15 @@ async function runEngine(date: string, checkin: Record<string, unknown>): Promis
  * 命中排计划意图就返回可直接用的 Plan（prompt=null，不过模型）。
  * 任何失败都返回带 reason 的 Plan，不回落检索——回落会答非所问（返回一段历史文字）。
  */
-export async function tryPlanSession(question: string): Promise<
-  { plan: Plan } | { error: string } | null
-> {
+export async function tryPlanSession(
+  question: string,
+  opts: { checkin?: CheckinInput } = {}
+): Promise<{ plan: Plan } | { error: string } | null> {
   if (!isPlanRequest(question)) return null;
   const t0 = Date.now();
   try {
     const date = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Shanghai" });
-    const checkin = await readCheckin(date);
+    const checkin = await resolveCheckin(date, opts.checkin);
     const tiers = await runEngine(date, checkin);
     const bad = tiers.find((t) => t.error);
     if (bad) return { error: `排课引擎：${bad.error}` };
