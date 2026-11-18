@@ -46,6 +46,8 @@ export interface WriteResult {
   path?: string;
   reason?: string;
   published?: boolean;
+  /** 当天记录原本不存在、这次是新建成的最小骨架 */
+  created?: boolean;
 }
 
 /** 知识库根：KB_DIRS 第一项优先（与 plan-session 同一条规则）。 */
@@ -215,6 +217,29 @@ function upsertBlock(body: string, block: string): string {
 }
 
 /**
+ * 当天还没有健康记录时的最小骨架（2026-11-18 改）。
+ *
+ * 原先的策略是「不存在就报错，别造空记录」。实际用起来早上一开机就没法录入——
+ * 那天的记录往往要等别的流程才建，而判档是第一件事。
+ * 现在改成**建一份最小可用记录**：只写 frontmatter 必需项 + 判档块，
+ * 其余字段留空，后续任何脚本都能正常读（缺字段=空值），不会污染周复盘。
+ */
+function newRecord(date: string): string {
+  return [
+    "---",
+    `title: "${date}-健康记录"`,
+    'type: "health-daily"',
+    `date: "${date}"`,
+    'source: "小程序录入"',
+    'tags: ["域/健康", "类型/健康数据记录表"]',
+    'status: "inbox"',
+    "---",
+    "",
+    "",
+  ].join("\n");
+}
+
+/**
  * 写回当天健康记录。返回 ok=false 时**不要**假装成功——调用方要把原因回给页面。
  */
 export async function writeCheckinRecord(o: WriteCheckinOpts): Promise<WriteResult> {
@@ -222,10 +247,22 @@ export async function writeCheckinRecord(o: WriteCheckinOpts): Promise<WriteResu
   if (!root) return { ok: false, reason: "没配知识库路径（KB_DIRS / KB_DIR）" };
   const file = recordPath(o.date);
   let text: string;
+  let created = false;
   try {
     text = await fs.readFile(file, "utf8");
-  } catch {
-    return { ok: false, path: file, reason: `当天健康记录不存在：${o.date}（先建记录，脚本不替你造）` };
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException)?.code;
+    if (code !== "ENOENT") {
+      return { ok: false, path: file, reason: e instanceof Error ? e.message : "读取失败" };
+    }
+    // 目录在不在：连目录都没有说明 KB_DIRS 配错了，别硬造
+    try {
+      await fs.access(path.dirname(file));
+    } catch {
+      return { ok: false, path: file, reason: `每日记录目录不存在：${path.dirname(file)}` };
+    }
+    text = newRecord(o.date);
+    created = true;
   }
 
   const doc = splitDoc(text);
@@ -264,14 +301,14 @@ export async function writeCheckinRecord(o: WriteCheckinOpts): Promise<WriteResu
   const body = upsertBlock(doc.body, buildBlock(o));
   const next = `---\n${head.join("\n")}\n---\n${body.startsWith("\n") ? "" : "\n"}${body.replace(/^\n+/, "\n")}`;
 
-  if (next === text) return { ok: true, path: file };
+  if (next === text) return { ok: true, path: file, created };
 
   try {
     await fs.writeFile(file, next, "utf8");
   } catch (e) {
     return { ok: false, path: file, reason: e instanceof Error ? e.message : "写入失败" };
   }
-  return { ok: true, path: file };
+  return { ok: true, path: file, created };
 }
 
 /**
