@@ -327,6 +327,69 @@ export async function writeCheckinRecord(o: WriteCheckinOpts): Promise<WriteResu
   return { ok: true, path: file, created };
 }
 
+/** 判档块「输入：」行里补上清醒时长/睡眠效率；没有块就留一条补录说明。 */
+function patchAwakeInInputs(body: string, awake: number, eff: number): string {
+  if (!/^- 输入：/m.test(body)) {
+    return body + `\n- 补录清醒时长：${awake}min → 睡眠效率 ${eff}%\n`;
+  }
+  return body.replace(/^- 输入：.*$/m, (line) => {
+    const rest = line
+      .replace(/清醒 [\d.]+min \/ /g, "")
+      .replace(/睡眠效率 [\d.]+% \/ /g, "");
+    const add = `清醒 ${awake}min / 睡眠效率 ${eff}% / `;
+    const i = rest.indexOf("静息心率");
+    return i >= 0 ? rest.slice(0, i) + add + rest.slice(i) : `${rest} / ${add.replace(/ \/ $/, "")}`;
+  });
+}
+
+/**
+ * 只补清醒时长 → 睡眠效率（2026-11-19，首页独立入口）。
+ *
+ * 不改判档结论、不重写判档块的其他内容，也不创建新记录：睡眠小时数从当天
+ * frontmatter 读，缺了就明确报错，绝不替用户猜。写入后由调用方触发推云。
+ */
+export async function updateAwakeOnly(
+  date: string,
+  awakeMin: number
+): Promise<WriteResult & { efficiencyPct?: number; sleepHours?: number }> {
+  const root = kbRoot();
+  if (!root) return { ok: false, reason: "没配知识库路径（KB_DIRS / KB_DIR）" };
+  if (!Number.isFinite(awakeMin) || awakeMin < 0 || awakeMin > 600) {
+    return { ok: false, reason: "清醒时长要在 0–600 分钟之间" };
+  }
+  const file = recordPath(date);
+  let text: string;
+  try {
+    text = await fs.readFile(file, "utf8");
+  } catch {
+    return { ok: false, path: file, reason: "当天健康记录不存在，先去判档页录一次" };
+  }
+  const doc = splitDoc(text);
+  if (!doc) return { ok: false, path: file, reason: "健康记录的 frontmatter 格式不对，没敢改" };
+  const sh = doc.head.find((l) => l.startsWith("sleep_hours:"));
+  const sleep = sh ? num(sh.slice(sh.indexOf(":") + 1)) : null;
+  if (sleep === null || sleep <= 0) {
+    return { ok: false, path: file, reason: "当天没记录睡眠时长，先在判档页录一次" };
+  }
+
+  const awake = Math.round(awakeMin * 10) / 10;
+  const eff = Math.round((sleep * 60 / (sleep * 60 + awake)) * 1000) / 10;
+  const head = setFields(doc.head, {
+    sleep_awake_min: awake,
+    sleep_efficiency_pct: eff,
+  });
+  const body = patchAwakeInInputs(doc.body, awake, eff);
+  const next = `---\n${head.join("\n")}\n---\n${body.startsWith("\n") ? "" : "\n"}${body.replace(/^\n+/, "\n")}`;
+  if (next !== text) {
+    try {
+      await fs.writeFile(file, next, "utf8");
+    } catch (e) {
+      return { ok: false, path: file, reason: e instanceof Error ? e.message : "写入失败" };
+    }
+  }
+  return { ok: true, path: file, efficiencyPct: eff, sleepHours: sleep };
+}
+
 /**
  * 追加/更新「已写入练练」那一行（2026-11-17）。
  *
