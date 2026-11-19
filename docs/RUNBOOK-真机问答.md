@@ -103,30 +103,41 @@
 云函数和数据库在云端，所以你实际要盯的只有这两个。它们都是会话级进程，
 终端关掉或 Mac 重启就停——停了不是坏了，重新起即可。
 
-## 五、启动步骤（两个终端，各占一个标签页）
-
-**终端 A —— Fit Agent 服务**
+## 五、启动步骤（一条命令）
 
 ```bash
 cd ~/dev/fitness-agent
-./scripts/service.sh start-once
+./scripts/qa-up.sh
 ```
 
-看到监听 `127.0.0.1:3000` 就成了。这个命令**占住终端**，关掉等于停服务。
-（launchd 自启在这台机器上注册失败过，所以走前台方式最稳。）
+它按顺序做四件事，**不需要再开第二个终端、也不需要去开发者工具改数据库**：
 
-**终端 B —— Cloudflare 隧道**
+1. Fit Agent 没起来就起（生产模式，`127.0.0.1:3000`；已在跑就复用）
+2. 起 Cloudflare 快速隧道，从日志抓本次的 `https://xxx.trycloudflare.com`
+3. 调 `scripts/set_base_url.py` 把该地址写回云数据库 `fit_agent_config.baseUrl`
+   （走微信 `tcb/databaseupdate` 接口，凭据复用 personal-system 的 `.env`）
+4. 前台守着，`Ctrl-C` 一起收掉隧道；服务若本就在跑则不动
+
+输出里看到这三行就成了：
+
+```
+② Cloudflare 隧道
+   https://xxxx-xxxx.xxxx.trycloudflare.com
+✓ baseUrl 已更新
+```
+
+**想换域名/查当前值**：
 
 ```bash
-cloudflared tunnel --no-autoupdate --url http://127.0.0.1:3000
+python3 scripts/set_base_url.py --show                                  # 看云库里现在是哪个
+python3 scripts/set_base_url.py https://xxx.trycloudflare.com           # 手动写一个
 ```
 
-终端会打印一个 `https://xxxx-xxxx.xxxx.trycloudflare.com`，**复制备用，终端保持开着**。
-不用注册账号；TLS 由 Cloudflare 在隧道层终结，Fit Agent 仍然只听回环地址。
+> 只有「想让域名永远不变」才需要另想办法（自备域名 + `cloudflared tunnel create`
+> 命名隧道，或 ngrok 免费固定域名）。快速隧道本身没有固定域名可用。
 
-**拿到新 URL 后**：去微信开发者工具 → 云开发 → 数据库 → `fit_agent_config` →
-那条记录，把 `baseUrl` 改成新的根地址（不带 `/api/ask`、不带结尾斜杠）。
-`token` 不用动。
+（旧做法备忘：终端 A `./scripts/service.sh start-once`，终端 B `cloudflared tunnel
+--no-autoupdate --url http://127.0.0.1:3000`，再把打印出来的 URL 手工填进云数据库。）
 
 ## 六、验证有没有通（从近到远三步）
 
@@ -155,8 +166,10 @@ curl -s --max-time 30 -H "x-fit-token: $FIT_AGENT_TOKEN" \
 
 | 场景 | 要做什么 |
 |---|---|
-| 写完当天训练记录 | 终端 A `Ctrl-C` 后重跑 `start-once`，刷新索引 |
-| 隧道 URL 变了（每次重启必变） | 只改云数据库的 `baseUrl`，不动代码、不重新部署、不重新上传 |
+| 每个早上 / 重启后 | `./scripts/qa-up.sh` 一条命令，隧道地址自动写进云数据库 |
+| 写完当天训练记录 | `Ctrl-C` 后重跑 `qa-up.sh`（索引只在进程启动时建，必须重启才读得到新内容） |
+| 隧道 URL 变了 | **不用管**，`qa-up.sh` 已自动写回；只有隧道不是它起的才需要 `set_base_url.py` 手动写 |
+| 想核对云库里的地址 | `python3 scripts/set_base_url.py --show` |
 | token 轮换 | `.env.local` + 云数据库 `token` 两处同步改，然后重启服务 |
 | 合规检查 | 手机号 / 身份证 / token 不进代码、不进 git；提交守卫会拦 32+ 位裸 hex |
 
