@@ -148,6 +148,7 @@ function buildBlock(o: WriteCheckinOpts): string {
   const inputs: string[] = [];
   const sleep = num(ck.sleep_hours);
   const deep = num(ck.deep_sleep_min);
+  const awake = num(ck.sleep_awake_min);
   const hr = num(ck.resting_hr);
   const fatigue = num(ck.fatigue);
   const soreness = num(ck.soreness);
@@ -156,6 +157,13 @@ function buildBlock(o: WriteCheckinOpts): string {
 
   if (sleep !== null) inputs.push(`睡眠 ${sleep}h`);
   if (deep !== null) inputs.push(`深睡 ${Math.round(deep)}min`);
+  if (awake !== null && awake >= 0) {
+    inputs.push(`清醒 ${Math.round(awake)}min`);
+    if (sleep !== null && sleep > 0) {
+      const eff = Math.round((sleep * 60 / (sleep * 60 + awake)) * 1000) / 10;
+      inputs.push(`睡眠效率 ${eff}%`);
+    }
+  }
   if (hr !== null) inputs.push(`静息心率 ${hr}`);
   if (fatigue !== null) inputs.push(`疲劳 ${fatigue}`);
   if (soreness !== null) inputs.push(`酸痛 ${soreness}`);
@@ -271,6 +279,7 @@ export async function writeCheckinRecord(o: WriteCheckinOpts): Promise<WriteResu
   const ck = o.checkin || {};
   const sleep = num(ck.sleep_hours);
   const deep = num(ck.deep_sleep_min);
+  const awake = num(ck.sleep_awake_min);
   const v = o.verdict || {};
 
   const upd: Record<string, string | number | null> = {};
@@ -278,6 +287,13 @@ export async function writeCheckinRecord(o: WriteCheckinOpts): Promise<WriteResu
   // 记录里存的是百分比；有分钟没有小时就没法换算，宁可不写
   if (sleep !== null && sleep > 0 && deep !== null) {
     upd.deep_sleep_pct = Math.round((deep / (sleep * 60)) * 1000) / 10;
+  }
+  // 睡眠效率 = 睡眠 ÷（睡眠 + 清醒）×100%，与苹果手表历史口径一致（155 天记录验证）。
+  // 清醒时长来自录入页，不参与判档，只算这个展示字段。
+  if (sleep !== null && sleep > 0 && awake !== null && awake >= 0) {
+    const totalMin = sleep * 60 + awake;
+    upd.sleep_efficiency_pct = Math.round((sleep * 60 / totalMin) * 1000) / 10;
+    upd.sleep_awake_min = Math.round(awake * 10) / 10;
   }
   const hr = num(ck.resting_hr);
   if (hr !== null) upd.resting_hr = hr;

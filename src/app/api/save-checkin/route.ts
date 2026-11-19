@@ -5,8 +5,9 @@ import { triggerPublish, writeCheckinRecord, type Verdict } from "@/lib/kb-write
 /**
  * POST /api/save-checkin —— 第一个确认：把录入的判档数据写进当天健康记录（2026-11-17）
  *
- * 入参: { date, checkin:{sleep_hours,deep_sleep_min,resting_hr,fatigue,soreness,weight_kg,body_fat_pct},
+ * 入参: { date, checkin:{sleep_hours,deep_sleep_min,sleep_awake_min,resting_hr,fatigue,soreness,weight_kg,body_fat_pct},
  *         verdict:{judge,status,red,yellow,dimensions,dims[]}, tiers:[{tier,totalSets}] }
+ *         —— sleep_awake_min（清醒时长）只用于算睡眠效率，不进判档维度计数
  * 出参: { ok, kb:{ok,path,reason}, publish:{started,log,reason} }  ← 永不 500
  *
  * 与 /api/save-plan 的分工（用户 2026-11-17 明确）：
